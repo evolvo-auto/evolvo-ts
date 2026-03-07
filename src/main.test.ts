@@ -298,7 +298,19 @@ describe("main", () => {
 
     expect(addProgressCommentMock).toHaveBeenCalledWith(
       13,
-      expect.stringContaining("`pnpm validate` (name=pnpm, status=1, elapsed=321ms)"),
+      expect.stringContaining("`pnpm validate` (name=pnpm, status=1, elapsed=321ms"),
+    );
+    expect(addProgressCommentMock).toHaveBeenCalledWith(
+      13,
+      expect.stringContaining("exit_code=1"),
+    );
+    expect(addProgressCommentMock).toHaveBeenCalledWith(
+      13,
+      expect.stringContaining("duration_ms=321ms"),
+    );
+    expect(addProgressCommentMock).toHaveBeenCalledWith(
+      13,
+      expect.stringContaining("outcome=failed"),
     );
   });
 
