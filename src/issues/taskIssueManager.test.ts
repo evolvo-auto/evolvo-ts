@@ -125,6 +125,29 @@ describe("TaskIssueManager", () => {
     ]);
   });
 
+  it("paginates recent closed issues until the requested non-PR limit is satisfied", async () => {
+    const client = createClientMock();
+    const firstPage = Array.from({ length: 100 }, (_, index) =>
+      createIssue({ number: index + 1, state: "closed" }),
+    );
+    firstPage[0] = createIssue({ number: 1, state: "closed", pull_request: { url: "pr-1" } });
+    client.get
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce([
+        createIssue({ number: 101, state: "closed", pull_request: { url: "pr-2" } }),
+        createIssue({ number: 102, state: "closed" }),
+      ]);
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.listRecentClosedIssues(100);
+
+    expect(client.get).toHaveBeenNthCalledWith(1, "?state=closed&sort=updated&direction=desc&per_page=100&page=1");
+    expect(client.get).toHaveBeenNthCalledWith(2, "?state=closed&sort=updated&direction=desc&per_page=100&page=2");
+    expect(result).toHaveLength(100);
+    expect(result[0]?.number).toBe(2);
+    expect(result[99]?.number).toBe(102);
+  });
+
   it("creates planned issues without generating follow-up titles", async () => {
     const client = createClientMock();
     client.get
@@ -177,6 +200,41 @@ describe("TaskIssueManager", () => {
     expect(result.created[0]?.title).toBe("Distinct candidate");
     expect(client.post).toHaveBeenCalledTimes(1);
     expect(client.post).toHaveBeenCalledWith("", expect.objectContaining({ title: "Distinct candidate" }));
+  });
+
+  it("skips planned duplicates found beyond the first recent-closed page", async () => {
+    const client = createClientMock();
+    const firstClosedPage = Array.from({ length: 100 }, (_, index) =>
+      createIssue({
+        number: index + 1,
+        state: "closed",
+        title: `Closed issue ${index + 1}`,
+      }),
+    );
+    client.get
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(firstClosedPage)
+      .mockResolvedValueOnce([
+        createIssue({ number: 101, state: "closed", title: "Late duplicate candidate" }),
+      ]);
+    client.post.mockResolvedValueOnce(createIssue({ number: 201, title: "Fresh candidate" }));
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.createPlannedIssues({
+      minimumIssueCount: 2,
+      maximumOpenIssues: 4,
+      issues: [
+        { title: "Late duplicate candidate", description: "Should be skipped from page two history." },
+        { title: "Fresh candidate", description: "Should still be created." },
+      ],
+    });
+
+    expect(client.get).toHaveBeenNthCalledWith(2, "?state=closed&sort=updated&direction=desc&per_page=100&page=1");
+    expect(client.get).toHaveBeenNthCalledWith(3, "?state=closed&sort=updated&direction=desc&per_page=100&page=2");
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0]?.title).toBe("Fresh candidate");
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(client.post).toHaveBeenCalledWith("", expect.objectContaining({ title: "Fresh candidate" }));
   });
 
   it("deduplicates planned titles that only differ by a follow-up suffix", async () => {

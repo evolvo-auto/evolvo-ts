@@ -52,6 +52,7 @@ describe("plannerAgent", () => {
       approvalPolicy: "never",
       networkAccessEnabled: false,
     }));
+    expect(issueManager.listRecentClosedIssues).toHaveBeenCalledWith(300);
     expect(createPlannedIssuesMock).toHaveBeenCalledWith({
       minimumIssueCount: 3,
       maximumOpenIssues: 5,

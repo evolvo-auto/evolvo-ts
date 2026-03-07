@@ -1,5 +1,6 @@
 import { Codex, type ThreadOptions } from "@openai/codex-sdk";
 import {
+  PLANNED_ISSUE_RECENT_CLOSED_LOOKBACK_LIMIT,
   normalizePlannedIssueComparisonTitle,
   type IssueSummary,
   type PlannedIssueDraft,
@@ -160,7 +161,9 @@ export async function runPlannerAgent(input: PlannerAgentInput): Promise<Planner
 
   try {
     const openIssues = await input.issueManager.listOpenIssues();
-    const recentClosedIssues = await input.issueManager.listRecentClosedIssues();
+    const recentClosedIssues = await input.issueManager.listRecentClosedIssues(
+      PLANNED_ISSUE_RECENT_CLOSED_LOOKBACK_LIMIT,
+    );
     const thread = codex.startThread({
       ...PLANNER_THREAD_OPTIONS,
       workingDirectory: input.workDir,

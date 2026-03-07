@@ -3,6 +3,7 @@ import { GitHubApiError, GitHubClient } from "../github/githubClient.js";
 const IN_PROGRESS_LABEL = "in progress";
 const COMPLETED_LABEL = "completed";
 const FOLLOW_UP_TITLE_SUFFIX_PATTERN = /\s*\(follow-up\s+\d+\)\s*$/i;
+export const PLANNED_ISSUE_RECENT_CLOSED_LOOKBACK_LIMIT = 300;
 
 type GitHubLabel = {
   name: string;
@@ -339,11 +340,25 @@ export class TaskIssueManager {
   }
 
   public async listRecentClosedIssues(limit = TaskIssueManager.ISSUES_PER_PAGE): Promise<IssueSummary[]> {
-    const perPage = Math.max(1, Math.min(TaskIssueManager.ISSUES_PER_PAGE, Math.floor(limit)));
-    const issues = await this.client.get<GitHubIssue[]>(
-      `?state=closed&sort=updated&direction=desc&per_page=${perPage}&page=1`,
-    );
-    return issues.filter((issue) => issue.pull_request === undefined).map(formatIssue);
+    const requestedLimit = Math.max(1, Math.floor(limit));
+    const perPage = Math.max(1, Math.min(TaskIssueManager.ISSUES_PER_PAGE, requestedLimit));
+    const issues: IssueSummary[] = [];
+    let page = 1;
+
+    while (issues.length < requestedLimit) {
+      const batch = await this.client.get<GitHubIssue[]>(
+        `?state=closed&sort=updated&direction=desc&per_page=${perPage}&page=${page}`,
+      );
+      issues.push(...batch.filter((issue) => issue.pull_request === undefined).map(formatIssue));
+
+      if (batch.length < perPage) {
+        break;
+      }
+
+      page += 1;
+    }
+
+    return issues.slice(0, requestedLimit);
   }
 
   public async createPlannedIssues(options: {
@@ -365,7 +380,7 @@ export class TaskIssueManager {
       return { created: [] };
     }
 
-    const recentClosed = await this.listRecentClosedIssues();
+    const recentClosed = await this.listRecentClosedIssues(PLANNED_ISSUE_RECENT_CLOSED_LOOKBACK_LIMIT);
     const existingTitles = new Set(
       [...openIssues.map((issue) => issue.title), ...recentClosed.map((issue) => issue.title)].map((title) =>
         normalizePlannedIssueComparisonTitle(title)
