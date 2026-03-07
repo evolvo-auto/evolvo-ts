@@ -716,6 +716,35 @@ describe("main", () => {
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #24: Generated\n\ngenerated");
   });
 
+  it("continues through completed-only queue replenishment without hitting startup default prompt", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 25, title: "Done", description: "done", state: "open", labels: ["completed"] },
+      ])
+      .mockResolvedValueOnce([
+        { number: 26, title: "Replenished", description: "from queue", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    replenishSelfImprovementIssuesMock.mockResolvedValueOnce({
+      created: [{ number: 26, title: "Replenished", description: "from queue", state: "open", labels: [] }],
+    });
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #26: Replenished\n\nfrom queue");
+    expect(console.log).not.toHaveBeenCalledWith(DEFAULT_PROMPT);
+    const replenishedCycleIndex = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.findIndex(
+      (call) => call[0] === "Cycle 2 queue health: open=1 selected=#26",
+    );
+    const stopLogIndex = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.findIndex(
+      (call) => call[0] === "No actionable open issues remaining and no new issues were created. Issue loop stopped.",
+    );
+    expect(replenishedCycleIndex).toBeGreaterThan(-1);
+    expect(stopLogIndex).toBeGreaterThan(replenishedCycleIndex);
+  });
+
   it("replenishes a drained empty queue and continues processing without exiting", async () => {
     process.argv = ["node", "test-runner.ts"];
     listOpenIssuesMock
