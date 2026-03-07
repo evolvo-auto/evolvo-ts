@@ -34,8 +34,8 @@ async function startUpdatedRuntime(workingDirectory: string): Promise<void> {
 
   const child = spawn("pnpm", ["start"], {
     cwd: workingDirectory,
-    detached: true,
-    stdio: "ignore",
+    detached: false,
+    stdio: "inherit",
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -65,7 +65,6 @@ async function startUpdatedRuntime(workingDirectory: string): Promise<void> {
     child.once("exit", onExit);
   });
 
-  child.unref();
   console.log(`[restart] Started updated runtime process (pid ${child.pid ?? "unknown"}).`);
 }
 

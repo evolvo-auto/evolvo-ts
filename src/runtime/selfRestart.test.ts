@@ -12,13 +12,11 @@ function createChildProcessStub(overrides: {
   pid?: number;
   once?: (event: string, handler: (...args: unknown[]) => void) => void;
   removeListener?: (event: string, handler: (...args: unknown[]) => void) => void;
-  unref?: () => void;
 } = {}) {
   return {
     pid: overrides.pid ?? 999,
     once: overrides.once ?? vi.fn(),
     removeListener: overrides.removeListener ?? vi.fn(),
-    unref: overrides.unref ?? vi.fn(),
   };
 }
 
@@ -59,10 +57,9 @@ describe("runPostMergeSelfRestart", () => {
     expect(execFileMock).toHaveBeenNthCalledWith(4, "pnpm", ["build"], { cwd: "/tmp/evolvo" }, expect.any(Function));
     expect(spawnMock).toHaveBeenCalledWith("pnpm", ["start"], {
       cwd: "/tmp/evolvo",
-      detached: true,
-      stdio: "ignore",
+      detached: false,
+      stdio: "inherit",
     });
-    expect(child.unref).toHaveBeenCalledTimes(1);
     expect(onceHandlers.error).toBeTypeOf("function");
     expect(onceHandlers.exit).toBeTypeOf("function");
   });
