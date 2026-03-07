@@ -333,6 +333,36 @@ describe("main replenishment integration", () => {
     expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
   });
 
+  it("replenishes a completed-only open queue and continues processing without exiting", async () => {
+    mockApiState.issues = [
+      {
+        number: 90,
+        title: "Already done",
+        body: "completed work item",
+        state: "open",
+        labels: [{ name: "completed" }],
+      },
+    ];
+    mockApiState.nextIssueNumber = 100;
+    mockApiState.createdIssueTitles = [];
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(mockApiState.createdIssueTitles).toHaveLength(3);
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 1 queue health: open=1 selected=none queueAction=replenish created=3 outcome=continue",
+    );
+    expect(runCodingAgentMock).toHaveBeenCalledTimes(2);
+    const firstPrompt = runCodingAgentMock.mock.calls[0]?.[0];
+    expect(firstPrompt).toContain(`Issue #100: ${mockApiState.createdIssueTitles[0]}`);
+    expect(console.log).not.toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(console.log).not.toHaveBeenCalledWith(
+      "No actionable open issues remaining and no new issues were created. Issue loop stopped.",
+    );
+    expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
+  });
+
   it("continues processing when mid-run replenishment analysis fails and fallback templates are used", async () => {
     const { DEFAULT_PROMPT, main } = await import("./main.js");
     generateStartupIssueTemplatesMock.mockRejectedValueOnce(new Error("analysis unavailable mid-run"));
