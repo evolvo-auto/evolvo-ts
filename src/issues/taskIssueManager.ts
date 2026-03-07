@@ -30,6 +30,55 @@ export type IssueActionResult = {
   issue?: IssueSummary;
 };
 
+export type ReplenishIssuesOptions = {
+  minimumIssueCount: number;
+  maximumOpenIssues: number;
+};
+
+export type ReplenishIssuesResult = {
+  created: IssueSummary[];
+};
+
+type IssueTemplate = {
+  title: string;
+  description: string;
+};
+
+const SELF_IMPROVEMENT_ISSUE_TEMPLATES: IssueTemplate[] = [
+  {
+    title: "Harden run loop retry handling for transient GitHub failures",
+    description:
+      "Add bounded retry/backoff around transient GitHub API errors in the run loop and cover the failure/recovery paths with tests.",
+  },
+  {
+    title: "Add regression test for empty-queue issue replenishment flow",
+    description:
+      "Add an integration-style runtime test that validates queue replenishment creates new issues and continues processing without exiting.",
+  },
+  {
+    title: "Improve validation reporting with command, exit code, and duration",
+    description:
+      "Enhance validation logs to include command name, exit status, and elapsed time to improve debugging after failed runs.",
+  },
+  {
+    title: "Guard commit staging to reject unrelated modified files",
+    description:
+      "Add a pre-commit safeguard that verifies staged files match the active task scope and blocks accidental unrelated changes.",
+  },
+  {
+    title: "Add structured lifecycle logging for issue cycle transitions",
+    description:
+      "Emit structured logs for issue selection, implementation start/end, review outcome, and merge transition to improve observability.",
+  },
+];
+
+function buildFollowUpTemplate(template: IssueTemplate, sequence: number): IssueTemplate {
+  return {
+    title: `${template.title} (follow-up ${sequence})`,
+    description: `${template.description}\n\nFollow-up: address remaining gaps discovered after earlier work.`,
+  };
+}
+
 function formatIssue(issue: GitHubIssue): IssueSummary {
   return {
     number: issue.number,
@@ -101,6 +150,64 @@ export class TaskIssueManager {
     }
 
     return issues.filter((issue) => issue.pull_request === undefined).map(formatIssue);
+  }
+
+  public async replenishSelfImprovementIssues(options: ReplenishIssuesOptions): Promise<ReplenishIssuesResult> {
+    const minimumIssueCount = Math.max(0, Math.floor(options.minimumIssueCount));
+    const maximumOpenIssues = Math.max(0, Math.floor(options.maximumOpenIssues));
+
+    if (minimumIssueCount === 0 || maximumOpenIssues === 0) {
+      return { created: [] };
+    }
+
+    const openIssues = await this.listOpenIssues();
+    const remainingOpenSlots = maximumOpenIssues - openIssues.length;
+    if (remainingOpenSlots <= 0) {
+      return { created: [] };
+    }
+
+    const recentClosed = await this.client.get<GitHubIssue[]>(
+      `?state=closed&sort=updated&direction=desc&per_page=${TaskIssueManager.ISSUES_PER_PAGE}&page=1`,
+    );
+    const existingTitles = new Set(
+      [...openIssues.map((issue) => issue.title), ...recentClosed.map((issue) => issue.title)].map((title) =>
+        title.trim().toLowerCase(),
+      ),
+    );
+
+    const toCreateCount = Math.min(remainingOpenSlots, minimumIssueCount);
+    const templates: IssueTemplate[] = [];
+    let followUpSequence = 1;
+    for (const template of SELF_IMPROVEMENT_ISSUE_TEMPLATES) {
+      if (templates.length >= toCreateCount) {
+        break;
+      }
+
+      const normalizedTitle = template.title.trim().toLowerCase();
+      if (!existingTitles.has(normalizedTitle)) {
+        templates.push(template);
+        existingTitles.add(normalizedTitle);
+        continue;
+      }
+
+      const followUpTemplate = buildFollowUpTemplate(template, followUpSequence);
+      followUpSequence += 1;
+      const normalizedFollowUpTitle = followUpTemplate.title.trim().toLowerCase();
+      if (!existingTitles.has(normalizedFollowUpTitle)) {
+        templates.push(followUpTemplate);
+        existingTitles.add(normalizedFollowUpTitle);
+      }
+    }
+
+    const created: IssueSummary[] = [];
+    for (const template of templates) {
+      const result = await this.createIssue(template.title, template.description);
+      if (result.ok && result.issue) {
+        created.push(result.issue);
+      }
+    }
+
+    return { created };
   }
 
   public async markInProgress(issueNumber: number): Promise<IssueActionResult> {

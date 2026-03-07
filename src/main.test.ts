@@ -7,6 +7,7 @@ const getGitHubConfigMock = vi.fn();
 const listOpenIssuesMock = vi.fn();
 const markInProgressMock = vi.fn();
 const closeIssueMock = vi.fn();
+const replenishSelfImprovementIssuesMock = vi.fn();
 
 vi.mock("./environment.js", () => ({
   GITHUB_OWNER: "owner",
@@ -45,6 +46,7 @@ vi.mock("./issues/taskIssueManager.js", () => ({
     listOpenIssues = listOpenIssuesMock;
     markInProgress = markInProgressMock;
     closeIssue = closeIssueMock;
+    replenishSelfImprovementIssues = replenishSelfImprovementIssuesMock;
   },
 }));
 
@@ -70,6 +72,8 @@ describe("main", () => {
     markInProgressMock.mockResolvedValue({ ok: true, message: "ok" });
     closeIssueMock.mockReset();
     closeIssueMock.mockResolvedValue({ ok: true, message: "closed" });
+    replenishSelfImprovementIssuesMock.mockReset();
+    replenishSelfImprovementIssuesMock.mockResolvedValue({ created: [] });
     process.argv = ["node", "src/main.ts"];
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -105,6 +109,7 @@ describe("main", () => {
     expect(runIssueCommandMock).toHaveBeenCalledWith([]);
     expect(markInProgressMock).toHaveBeenCalledWith(12);
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #12: Fix login redirect\n\nHandle callback URL.");
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
   });
 
   it("prefers an issue already in progress", async () => {
@@ -139,12 +144,32 @@ describe("main", () => {
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(2, "Issue #8: Second\n\nsecond");
   });
 
-  it("logs and exits when there are no open issues", async () => {
+  it("replenishes issues and continues when queue is empty", async () => {
+    listOpenIssuesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { number: 19, title: "Generated", description: "generated", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    replenishSelfImprovementIssuesMock.mockResolvedValueOnce({
+      created: [{ number: 19, title: "Generated", description: "generated", state: "open", labels: [] }],
+    });
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(DEFAULT_PROMPT).toBeDefined();
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #19: Generated\n\ngenerated");
+  });
+
+  it("logs and exits when no issues are open and replenishment creates nothing", async () => {
     const { DEFAULT_PROMPT, main } = await import("./main.js");
 
     await main();
 
     expect(runCodingAgentMock).not.toHaveBeenCalled();
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
   });
 
@@ -174,7 +199,7 @@ describe("main", () => {
 
     expect(runCodingAgentMock).not.toHaveBeenCalled();
     expect(markInProgressMock).not.toHaveBeenCalled();
-    expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
   });
 
   it("falls back cleanly when GitHub credentials are invalid", async () => {
