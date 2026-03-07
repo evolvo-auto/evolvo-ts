@@ -113,7 +113,7 @@ export async function readChallengeMetrics(workDir: string): Promise<ChallengeMe
   });
 }
 
-async function writeChallengeMetrics(workDir: string, metrics: ChallengeMetrics): Promise<void> {
+export async function writeChallengeMetrics(workDir: string, metrics: ChallengeMetrics): Promise<void> {
   const metricsPath = getMetricsPath(workDir);
   await fs.mkdir(join(workDir, EVOLVO_DIRECTORY_NAME), { recursive: true });
   await fs.writeFile(metricsPath, `${JSON.stringify(normalizeMetricsShape(metrics), null, 2)}\n`, "utf8");

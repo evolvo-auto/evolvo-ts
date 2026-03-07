@@ -21,7 +21,16 @@ vi.mock("../challenges/challengeFailureLearning.js", () => ({
 
 vi.mock("../challenges/challengeMetrics.js", () => ({
   formatChallengeMetricsReport: vi.fn(() => "metrics-report"),
+  readChallengeMetrics: vi.fn(async () => ({
+    total: 0,
+    success: 0,
+    failure: 0,
+    attemptsToSuccess: { total: 0, samples: 0, average: 0 },
+    categoryCounts: {},
+    pendingAttemptsByChallenge: {},
+  })),
   recordChallengeAttemptMetrics: vi.fn(async () => ({ totalAttempts: 1 })),
+  writeChallengeMetrics: vi.fn(async () => {}),
 }));
 
 vi.mock("../challenges/retryGate.js", () => ({
@@ -148,6 +157,41 @@ describe("challengeLifecycle", () => {
     await updateChallengeMetrics(issueManager, issue, new Error("boom"), null);
 
     expect(console.error).toHaveBeenCalledWith("Could not update challenge metrics for issue #33: write failed");
+    expect(issueManager.updateLabels).not.toHaveBeenCalled();
+  });
+
+  it("rolls back persisted metrics when retry-state persistence fails", async () => {
+    const issueManager = createIssueManager();
+    const issue = createIssue({ number: 34 });
+    const previousMetrics = {
+      total: 4,
+      success: 2,
+      failure: 2,
+      attemptsToSuccess: { total: 5, samples: 2, average: 2.5 },
+      categoryCounts: { execution_failure: 2 },
+      pendingAttemptsByChallenge: { "34": 1 },
+    };
+    const updatedMetrics = {
+      total: 5,
+      success: 2,
+      failure: 3,
+      attemptsToSuccess: { total: 5, samples: 2, average: 2.5 },
+      categoryCounts: { execution_failure: 3 },
+      pendingAttemptsByChallenge: { "34": 2 },
+    };
+    vi.mocked(challengeMetrics.readChallengeMetrics).mockResolvedValueOnce(previousMetrics);
+    vi.mocked(challengeMetrics.recordChallengeAttemptMetrics).mockResolvedValueOnce(updatedMetrics);
+    vi.mocked(retryGate.recordChallengeAttemptOutcome).mockRejectedValueOnce(new Error("retry write failed"));
+
+    await updateChallengeMetrics(issueManager, issue, new Error("boom"), null);
+
+    expect(challengeMetrics.recordChallengeAttemptMetrics).toHaveBeenCalledWith(expect.any(String), {
+      challengeIssueNumber: issue.number,
+      success: false,
+      failureCategory: "execution_failure",
+    });
+    expect(challengeMetrics.writeChallengeMetrics).toHaveBeenCalledWith(expect.any(String), previousMetrics);
+    expect(console.error).toHaveBeenCalledWith("Could not update challenge metrics for issue #34: retry write failed");
     expect(issueManager.updateLabels).not.toHaveBeenCalled();
   });
 

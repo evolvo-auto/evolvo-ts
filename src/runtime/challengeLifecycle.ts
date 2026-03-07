@@ -8,7 +8,9 @@ import {
 } from "../challenges/challengeFailureLearning.js";
 import {
   formatChallengeMetricsReport,
+  readChallengeMetrics,
   recordChallengeAttemptMetrics,
+  writeChallengeMetrics,
 } from "../challenges/challengeMetrics.js";
 import {
   CHALLENGE_BLOCKED_LABEL,
@@ -26,6 +28,44 @@ import { describeRepositoryDefaultBranch } from "./defaultBranch.js";
 const CHALLENGE_MAX_ATTEMPTS = 3;
 const CHALLENGE_RETRY_COOLDOWN_MS = 60 * 60 * 1000;
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown error";
+}
+
+async function recordChallengeAttemptState(options: {
+  issueNumber: number;
+  success: boolean;
+  failureCategory?: string;
+}): Promise<{
+  metrics: Awaited<ReturnType<typeof recordChallengeAttemptMetrics>>;
+  retryState: Awaited<ReturnType<typeof recordChallengeAttemptOutcome>>;
+}> {
+  const previousMetrics = await readChallengeMetrics(WORK_DIR);
+  const metrics = await recordChallengeAttemptMetrics(WORK_DIR, {
+    challengeIssueNumber: options.issueNumber,
+    success: options.success,
+    failureCategory: options.failureCategory,
+  });
+
+  try {
+    const retryState = await recordChallengeAttemptOutcome(WORK_DIR, {
+      challengeIssueNumber: options.issueNumber,
+      success: options.success,
+    });
+    return { metrics, retryState };
+  } catch (error) {
+    try {
+      await writeChallengeMetrics(WORK_DIR, previousMetrics);
+    } catch (rollbackError) {
+      throw new Error(
+        `Challenge retry state update failed after metrics persisted: ${describeError(error)}. Metrics rollback failed: ${describeError(rollbackError)}`,
+      );
+    }
+
+    throw error;
+  }
+}
+
 export async function updateChallengeMetrics(
   issueManager: TaskIssueManager,
   issue: IssueSummary,
@@ -40,15 +80,10 @@ export async function updateChallengeMetrics(
   const failureCategory = success ? undefined : classifyChallengeFailure(runError, runResult);
 
   try {
-    const metrics = await recordChallengeAttemptMetrics(WORK_DIR, {
-      challengeIssueNumber: issue.number,
+    const { metrics, retryState } = await recordChallengeAttemptState({
+      issueNumber: issue.number,
       success,
       failureCategory,
-    });
-
-    const retryState = await recordChallengeAttemptOutcome(WORK_DIR, {
-      challengeIssueNumber: issue.number,
-      success,
     });
     const failureAttempts = retryState.failuresByChallenge[String(issue.number)]?.attempts ?? 0;
     const labelUpdate = success
