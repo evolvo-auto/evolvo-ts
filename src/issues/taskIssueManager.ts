@@ -50,6 +50,22 @@ type IssueTemplate = {
   description: string;
 };
 
+type FailureEvidenceCategory =
+  | "validation"
+  | "workflow"
+  | "runtime"
+  | "scopeControl"
+  | "queue"
+  | "review"
+  | "restart"
+  | "manualIntervention";
+
+type FailureEvidence = Record<FailureEvidenceCategory, number>;
+type IssueEvidenceSource = {
+  title: string;
+  body: string | null;
+};
+
 const SELF_IMPROVEMENT_ISSUE_TEMPLATES: IssueTemplate[] = [
   {
     title: "Harden run loop retry handling for transient GitHub failures",
@@ -83,6 +99,181 @@ function buildFollowUpTemplate(template: IssueTemplate, sequence: number): Issue
     title: `${template.title} (follow-up ${sequence})`,
     description: `${template.description}\n\nFollow-up: address remaining gaps discovered after earlier work.`,
   };
+}
+
+function createFailureEvidence(): FailureEvidence {
+  return {
+    validation: 0,
+    workflow: 0,
+    runtime: 0,
+    scopeControl: 0,
+    queue: 0,
+    review: 0,
+    restart: 0,
+    manualIntervention: 0,
+  };
+}
+
+function countKeywordOccurrences(text: string, patterns: RegExp[]): number {
+  let total = 0;
+  for (const pattern of patterns) {
+    if (pattern.test(text)) {
+      total += 1;
+    }
+  }
+
+  return total;
+}
+
+function toIssueEvidenceSource(issue: GitHubIssue | IssueSummary): IssueEvidenceSource {
+  if ("body" in issue) {
+    return {
+      title: issue.title,
+      body: issue.body ?? "",
+    };
+  }
+
+  return {
+    title: issue.title,
+    body: issue.description ?? "",
+  };
+}
+
+function collectFailureEvidence(issues: IssueEvidenceSource[]): FailureEvidence {
+  const evidence = createFailureEvidence();
+
+  for (const issue of issues) {
+    const text = `${issue.title}\n${issue.body ?? ""}`.toLowerCase();
+
+    const categoryMatches = [...text.matchAll(/challenge-failure-category:\s*([a-z_]+)/g)];
+    for (const match of categoryMatches) {
+      const category = match[1];
+      if (category === "validation_failure") {
+        evidence.validation += 8;
+      }
+      if (category === "workflow_failure") {
+        evidence.workflow += 8;
+      }
+      if (category === "execution_failure") {
+        evidence.runtime += 8;
+      }
+      if (category === "scope_control_failure") {
+        evidence.scopeControl += 8;
+      }
+    }
+
+    evidence.validation += countKeywordOccurrences(text, [
+      /\bvalidation\b/,
+      /\btypecheck\b/,
+      /\blint\b/,
+      /\bbuild\b/,
+      /\btest\b/,
+      /\bregression\b/,
+    ]);
+    evidence.workflow += countKeywordOccurrences(text, [
+      /\bworkflow\b/,
+      /\bgithub\b/,
+      /\brate limit\b/,
+      /\bretry\b/,
+      /\bpull request\b/,
+      /\bmerge\b/,
+      /\bbranch\b/,
+      /\bcommit\b/,
+      /\bpush\b/,
+    ]);
+    evidence.runtime += countKeywordOccurrences(text, [
+      /\bruntime\b/,
+      /\bexception\b/,
+      /\bexecution\b/,
+      /\berror\b/,
+    ]);
+    evidence.scopeControl += countKeywordOccurrences(text, [
+      /\bscope\b/,
+      /\bbounded\b/,
+      /\bunrelated\b/,
+      /\bstaging\b/,
+    ]);
+    evidence.queue += countKeywordOccurrences(text, [
+      /\bqueue\b/,
+      /\breplenish(?:ment)?\b/,
+      /\bbootstrap\b/,
+      /\bstartup\b/,
+      /\bempty[- ]queue\b/,
+    ]);
+    evidence.review += countKeywordOccurrences(text, [
+      /\breview\b/,
+      /\bamended\b/,
+      /\baccept(?:ed|ance)?\b/,
+    ]);
+    evidence.restart += countKeywordOccurrences(text, [
+      /\brestart\b/,
+      /\bpost-merge\b/,
+    ]);
+    evidence.manualIntervention += countKeywordOccurrences(text, [
+      /\bmanual(?:ly)?\b/,
+      /\boperator\b/,
+      /\brecovery\b/,
+    ]);
+  }
+
+  return evidence;
+}
+
+function templateTargetedEvidenceScore(template: IssueTemplate, evidence: FailureEvidence): number {
+  const text = `${template.title}\n${template.description}`.toLowerCase();
+  let score = 0;
+
+  if (/\bvalidation\b|\btypecheck\b|\blint\b|\bbuild\b|\btest\b|\bregression\b/.test(text)) {
+    score += evidence.validation;
+  }
+  if (/\bworkflow\b|\bgithub\b|\brate limit\b|\bretry\b|\bpull request\b|\bmerge\b|\bbranch\b|\bcommit\b|\bpush\b/.test(text)) {
+    score += evidence.workflow;
+  }
+  if (/\bruntime\b|\bexception\b|\bexecution\b|\berror\b|\bfailure\b/.test(text)) {
+    score += evidence.runtime;
+  }
+  if (/\bscope\b|\bbounded\b|\bunrelated\b|\bstaging\b/.test(text)) {
+    score += evidence.scopeControl;
+  }
+  if (/\bqueue\b|\breplenish(?:ment)?\b|\bbootstrap\b|\bstartup\b|\bempty[- ]queue\b/.test(text)) {
+    score += evidence.queue;
+  }
+  if (/\breview\b|\bamended\b|\baccept(?:ed|ance)?\b/.test(text)) {
+    score += evidence.review;
+  }
+  if (/\brestart\b|\bpost-merge\b/.test(text)) {
+    score += evidence.restart;
+  }
+  if (/\bmanual(?:ly)?\b|\boperator\b|\brecovery\b/.test(text)) {
+    score += evidence.manualIntervention;
+  }
+
+  return score;
+}
+
+function prioritizeTemplatesByFailureEvidence(
+  baseTemplates: IssueTemplate[],
+  issues: Array<GitHubIssue | IssueSummary>,
+): IssueTemplate[] {
+  if (baseTemplates.length <= 1 || issues.length === 0) {
+    return baseTemplates;
+  }
+
+  const evidence = collectFailureEvidence(issues.map(toIssueEvidenceSource));
+  return baseTemplates
+    .map((template, index) => ({
+      template,
+      index,
+      score: templateTargetedEvidenceScore(template, evidence),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      return left.index - right.index;
+    })
+    .map((entry) => entry.template);
 }
 
 function formatIssue(issue: GitHubIssue): IssueSummary {
@@ -185,9 +376,10 @@ export class TaskIssueManager {
       ),
     );
 
+    const prioritizedTemplates = prioritizeTemplatesByFailureEvidence(baseTemplates, [...openIssues, ...recentClosed]);
     const toCreateCount = Math.min(remainingOpenSlots, minimumIssueCount);
     const templates = selectTemplatesForCreation({
-      baseTemplates,
+      baseTemplates: prioritizedTemplates,
       toCreateCount,
       existingTitles,
     });
