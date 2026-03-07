@@ -150,6 +150,66 @@ describe("TaskIssueManager", () => {
     expect(client.post).toHaveBeenCalledWith("", expect.objectContaining({ title: "Candidate B" }));
   });
 
+  it("skips planned titles that collide with recent follow-up history after normalization", async () => {
+    const client = createClientMock();
+    client.get
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        createIssue({
+          number: 4,
+          state: "closed",
+          title: "Startup bootstrap reliability hardening (follow-up 2)",
+        }),
+      ]);
+    client.post.mockResolvedValueOnce(createIssue({ number: 31, title: "Distinct candidate" }));
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.createPlannedIssues({
+      minimumIssueCount: 2,
+      maximumOpenIssues: 4,
+      issues: [
+        { title: "Startup bootstrap reliability hardening", description: "Should be blocked by history." },
+        { title: "Distinct candidate", description: "Should still be created." },
+      ],
+    });
+
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0]?.title).toBe("Distinct candidate");
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(client.post).toHaveBeenCalledWith("", expect.objectContaining({ title: "Distinct candidate" }));
+  });
+
+  it("deduplicates planned titles that only differ by a follow-up suffix", async () => {
+    const client = createClientMock();
+    client.get
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    client.post.mockResolvedValueOnce(
+      createIssue({ number: 31, title: "Startup bootstrap reliability hardening" }),
+    );
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.createPlannedIssues({
+      minimumIssueCount: 2,
+      maximumOpenIssues: 4,
+      issues: [
+        { title: "Startup bootstrap reliability hardening", description: "Keep the base title." },
+        {
+          title: "Startup bootstrap reliability hardening (follow-up 1)",
+          description: "This should be treated as the same planned title.",
+        },
+      ],
+    });
+
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0]?.title).toBe("Startup bootstrap reliability hardening");
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(client.post).toHaveBeenCalledWith(
+      "",
+      expect.objectContaining({ title: "Startup bootstrap reliability hardening" }),
+    );
+  });
+
   it("replenishes empty queue with provided repository-derived candidates", async () => {
     const client = createClientMock();
     client.get

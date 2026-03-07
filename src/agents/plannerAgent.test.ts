@@ -65,12 +65,15 @@ describe("plannerAgent", () => {
     ]);
   });
 
-  it("deduplicates repeated planner titles before creating issues", async () => {
+  it("deduplicates repeated planner titles after follow-up normalization before creating issues", async () => {
     threadRunMock.mockResolvedValueOnce({
       finalResponse: JSON.stringify({
         issues: [
           { title: "Harden planner duplicate filtering", description: "Use recent issue history to prevent repeats." },
-          { title: "Harden planner duplicate filtering", description: "This duplicate should be ignored." },
+          {
+            title: "Harden planner duplicate filtering (follow-up 1)",
+            description: "This follow-up variant should also be ignored.",
+          },
           { title: "Improve Codex planner diagnostics", description: "Capture planner failures with clearer logs." },
         ],
       }),
