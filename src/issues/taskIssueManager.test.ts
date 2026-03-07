@@ -184,6 +184,78 @@ describe("TaskIssueManager", () => {
     expect(client.post).toHaveBeenCalledTimes(3);
   });
 
+  it("exits safely with no creations when duplicate history exhausts bounded attempts", async () => {
+    const client = createClientMock();
+    const duplicateClosedHistory = [
+      createIssue({ number: 1, state: "closed", title: "Template A" }),
+      ...Array.from({ length: 20 }, (_, index) =>
+        createIssue({
+          number: index + 2,
+          state: "closed",
+          title: `Template A (follow-up ${index + 1})`,
+        }),
+      ),
+    ];
+
+    client.get.mockResolvedValueOnce([]).mockResolvedValueOnce(duplicateClosedHistory);
+
+    const manager = new TaskIssueManager(client as never);
+    const result = await manager.replenishSelfImprovementIssues({
+      minimumIssueCount: 5,
+      maximumOpenIssues: 5,
+      templates: [{ title: "Template A", description: "Heavy duplicate history." }],
+    });
+
+    expect(result).toEqual({ created: [] });
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("remains deterministic and returns valid follow-up issues when duplicates are common", async () => {
+    const client = createClientMock();
+    const duplicateClosedHistory = [
+      createIssue({ number: 1, state: "closed", title: "Template A" }),
+      ...Array.from({ length: 8 }, (_, index) =>
+        createIssue({
+          number: index + 2,
+          state: "closed",
+          title: `Template A (follow-up ${index + 1})`,
+        }),
+      ),
+      createIssue({ number: 99, state: "closed", title: "Template B" }),
+    ];
+
+    client.get.mockResolvedValueOnce([]).mockResolvedValueOnce(duplicateClosedHistory);
+    client.post
+      .mockResolvedValueOnce(createIssue({ number: 401, title: "Template A (follow-up 9)" }))
+      .mockResolvedValueOnce(createIssue({ number: 402, title: "Template B (follow-up 1)" }));
+
+    const manager = new TaskIssueManager(client as never);
+    const result = await manager.replenishSelfImprovementIssues({
+      minimumIssueCount: 2,
+      maximumOpenIssues: 5,
+      templates: [
+        { title: "Template A", description: "A desc" },
+        { title: "Template B", description: "B desc" },
+      ],
+    });
+
+    expect(result.created.map((issue) => issue.title)).toEqual([
+      "Template A (follow-up 9)",
+      "Template B (follow-up 1)",
+    ]);
+    expect(client.post).toHaveBeenCalledTimes(2);
+    expect(client.post).toHaveBeenNthCalledWith(
+      1,
+      "",
+      expect.objectContaining({ title: "Template A (follow-up 9)" }),
+    );
+    expect(client.post).toHaveBeenNthCalledWith(
+      2,
+      "",
+      expect.objectContaining({ title: "Template B (follow-up 1)" }),
+    );
+  });
+
   it("marks an issue in progress", async () => {
     const client = createClientMock();
     client.get.mockResolvedValue(createIssue({ labels: [{ name: "bug" }] }));
