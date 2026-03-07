@@ -1,13 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const REQUIRED_ENV = {
-  CONTEXT7_API_KEY: "ctx",
-  OPENAI_API_KEY: "openai",
-  GITHUB_TOKEN: "github-token",
-  GITHUB_OWNER: "owner",
-  GITHUB_REPO: "repo",
-} as const;
-
 async function importEnvironment() {
   vi.resetModules();
   return import("./environment.js");
@@ -20,9 +12,11 @@ describe("environment", () => {
   });
 
   it("exports the required environment variables", async () => {
-    for (const [key, value] of Object.entries(REQUIRED_ENV)) {
-      vi.stubEnv(key, value);
-    }
+    vi.stubEnv("CONTEXT7_API_KEY", "  ctx  ");
+    vi.stubEnv("OPENAI_API_KEY", "\topenai\t");
+    vi.stubEnv("GITHUB_TOKEN", " github-token ");
+    vi.stubEnv("GITHUB_OWNER", "  owner");
+    vi.stubEnv("GITHUB_REPO", "repo  ");
 
     const environment = await importEnvironment();
 
@@ -35,6 +29,18 @@ describe("environment", () => {
 
   it("throws when a required environment variable is missing", async () => {
     vi.stubEnv("CONTEXT7_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "openai");
+    vi.stubEnv("GITHUB_TOKEN", "github-token");
+    vi.stubEnv("GITHUB_OWNER", "owner");
+    vi.stubEnv("GITHUB_REPO", "repo");
+
+    await expect(importEnvironment()).rejects.toThrow(
+      "CONTEXT7_API_KEY is not set in the environment variables.",
+    );
+  });
+
+  it("throws when a required environment variable is whitespace-only", async () => {
+    vi.stubEnv("CONTEXT7_API_KEY", "   ");
     vi.stubEnv("OPENAI_API_KEY", "openai");
     vi.stubEnv("GITHUB_TOKEN", "github-token");
     vi.stubEnv("GITHUB_OWNER", "owner");
