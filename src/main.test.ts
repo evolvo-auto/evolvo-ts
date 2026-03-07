@@ -1108,7 +1108,7 @@ describe("main", () => {
     listOpenIssuesMock.mockResolvedValue([
       { number: 4, title: "Done", description: "Done", state: "open", labels: ["completed"] },
     ]);
-    const { DEFAULT_PROMPT, main } = await import("./main.js");
+    const { main } = await import("./main.js");
 
     await main();
 
