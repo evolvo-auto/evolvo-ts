@@ -11,6 +11,8 @@ const closeIssueMock = vi.fn();
 const replenishSelfImprovementIssuesMock = vi.fn();
 const generateStartupIssueTemplatesMock = vi.fn();
 const runPostMergeSelfRestartMock = vi.fn();
+const recordChallengeAttemptMetricsMock = vi.fn();
+const formatChallengeMetricsReportMock = vi.fn();
 
 const DEFAULT_RUN_RESULT = {
   mergedPullRequest: false,
@@ -47,6 +49,11 @@ vi.mock("./runtime/selfRestart.js", () => ({
 
 vi.mock("./issues/startupIssueBootstrap.js", () => ({
   generateStartupIssueTemplates: generateStartupIssueTemplatesMock,
+}));
+
+vi.mock("./challenges/challengeMetrics.js", () => ({
+  recordChallengeAttemptMetrics: recordChallengeAttemptMetricsMock,
+  formatChallengeMetricsReport: formatChallengeMetricsReportMock,
 }));
 
 vi.mock("./issues/runIssueCommand.js", () => ({
@@ -108,6 +115,17 @@ describe("main", () => {
     replenishSelfImprovementIssuesMock.mockResolvedValue({ created: [] });
     generateStartupIssueTemplatesMock.mockReset();
     generateStartupIssueTemplatesMock.mockResolvedValue([]);
+    recordChallengeAttemptMetricsMock.mockReset();
+    recordChallengeAttemptMetricsMock.mockResolvedValue({
+      total: 1,
+      success: 1,
+      failure: 0,
+      attemptsToSuccess: { total: 1, samples: 1, average: 1 },
+      categoryCounts: {},
+      pendingAttemptsByChallenge: {},
+    });
+    formatChallengeMetricsReportMock.mockReset();
+    formatChallengeMetricsReportMock.mockReturnValue("## Challenge Metrics");
     process.argv = ["node", "src/main.ts"];
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -145,7 +163,10 @@ describe("main", () => {
     expect(addProgressCommentMock).toHaveBeenCalledWith(12, expect.stringContaining("## Task Start"));
     expect(addProgressCommentMock).toHaveBeenCalledWith(12, expect.stringContaining("## Task Execution Log"));
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #12: Fix login redirect\n\nHandle callback URL.");
-    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
+    expect(recordChallengeAttemptMetricsMock).not.toHaveBeenCalled();
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ minimumIssueCount: 3, maximumOpenIssues: 5 }),
+    );
   });
 
   it("prefers an issue already in progress", async () => {
@@ -397,5 +418,48 @@ describe("main", () => {
 
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #56: Comment failure\n\nContinue anyway");
     expect(console.error).toHaveBeenCalledWith("Could not add lifecycle comment to issue #56: comment post failed");
+  });
+
+  it("records challenge metrics for accepted challenge attempts", async () => {
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 88, title: "Challenge pass", description: "solve", state: "open", labels: ["challenge"] },
+      ])
+      .mockResolvedValueOnce([]);
+    runCodingAgentMock.mockResolvedValueOnce({
+      ...DEFAULT_RUN_RESULT,
+      summary: {
+        ...DEFAULT_RUN_RESULT.summary,
+        reviewOutcome: "accepted",
+      },
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(recordChallengeAttemptMetricsMock).toHaveBeenCalledWith("/tmp/evolvo", {
+      challengeIssueNumber: 88,
+      success: true,
+      failureCategory: undefined,
+    });
+    expect(formatChallengeMetricsReportMock).toHaveBeenCalled();
+  });
+
+  it("records challenge metrics for challenge runtime failures", async () => {
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 89, title: "Challenge fail", description: "break", state: "open", labels: ["challenge"] },
+      ])
+      .mockResolvedValueOnce([]);
+    runCodingAgentMock.mockRejectedValueOnce(new Error("run blew up"));
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(recordChallengeAttemptMetricsMock).toHaveBeenCalledWith("/tmp/evolvo", {
+      challengeIssueNumber: 89,
+      success: false,
+      failureCategory: "execution_error",
+    });
   });
 });

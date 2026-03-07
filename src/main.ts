@@ -9,6 +9,10 @@ import { getGitHubConfig } from "./github/githubConfig.js";
 import { GitHubApiError, GitHubClient } from "./github/githubClient.js";
 import { TaskIssueManager, type IssueSummary } from "./issues/taskIssueManager.js";
 import { generateStartupIssueTemplates } from "./issues/startupIssueBootstrap.js";
+import {
+  formatChallengeMetricsReport,
+  recordChallengeAttemptMetrics,
+} from "./challenges/challengeMetrics.js";
 import type { CodingAgentRunResult, CommandExecutionSummary } from "./agents/runCodingAgent.js";
 
 export const DEFAULT_PROMPT = "No open issues available. Create an issue first.";
@@ -44,6 +48,62 @@ function buildPromptFromIssue(issue: IssueSummary): string {
 
 function formatIssueForLog(issue: IssueSummary): string {
   return `#${issue.number} ${issue.title}`;
+}
+
+function isChallengeIssue(issue: IssueSummary): boolean {
+  return hasLabel(issue, "challenge");
+}
+
+function classifyChallengeFailure(
+  runError: unknown,
+  runResult: CodingAgentRunResult | null,
+): string {
+  if (runError) {
+    return "execution_error";
+  }
+
+  if (!runResult) {
+    return "unknown";
+  }
+
+  if (runResult.summary.failedValidationCommands.length > 0) {
+    return "validation_failure";
+  }
+
+  if (runResult.summary.reviewOutcome === "amended") {
+    return "review_rejection";
+  }
+
+  return "unknown";
+}
+
+async function updateChallengeMetrics(
+  issue: IssueSummary,
+  runError: unknown,
+  runResult: CodingAgentRunResult | null,
+): Promise<void> {
+  if (!isChallengeIssue(issue)) {
+    return;
+  }
+
+  const success = runError === null && runResult !== null && runResult.summary.reviewOutcome === "accepted";
+  const failureCategory = success ? undefined : classifyChallengeFailure(runError, runResult);
+
+  try {
+    const metrics = await recordChallengeAttemptMetrics(WORK_DIR, {
+      challengeIssueNumber: issue.number,
+      success,
+      failureCategory,
+    });
+    console.log(formatChallengeMetricsReport(metrics));
+  } catch (error) {
+    if (error instanceof Error) {
+      console.error(`Could not update challenge metrics for issue #${issue.number}: ${error.message}`);
+      return;
+    }
+
+    console.error(`Could not update challenge metrics for issue #${issue.number}: unknown error.`);
+  }
 }
 
 function formatDuration(durationMs: number | null): string {
@@ -309,11 +369,13 @@ export async function main(): Promise<void> {
       });
 
       if (runError) {
+        await updateChallengeMetrics(selectedIssue, runError, runResult);
         await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueFailureComment(selectedIssue, runError));
         continue;
       }
 
       if (runResult) {
+        await updateChallengeMetrics(selectedIssue, runError, runResult);
         await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueExecutionComment(selectedIssue, runResult));
       }
 
