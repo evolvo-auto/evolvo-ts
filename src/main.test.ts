@@ -260,6 +260,8 @@ describe("main", () => {
     await main();
 
     expect(markInProgressMock).not.toHaveBeenCalled();
+    expect(addProgressCommentMock).not.toHaveBeenCalledWith(9, expect.stringContaining("## Task Start"));
+    expect(addProgressCommentMock).toHaveBeenCalledWith(9, expect.stringContaining("## Task Execution Log"));
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #9: B\n\nB");
   });
 

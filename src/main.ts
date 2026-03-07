@@ -680,14 +680,19 @@ export async function main(): Promise<void> {
           selectedIssue,
         });
 
+        let startedThisCycle = false;
         if (!hasIssueLabel(selectedIssue, "in progress")) {
           const result = await issueManager.markInProgress(selectedIssue.number);
           if (!result.ok) {
             console.error(`Could not mark issue #${selectedIssue.number} as in progress: ${result.message}`);
+          } else {
+            startedThisCycle = true;
           }
         }
 
-        await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueStartComment(selectedIssue));
+        if (startedThisCycle) {
+          await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueStartComment(selectedIssue));
+        }
 
         const prompt = buildPromptFromIssue(selectedIssue);
         console.log(`Prompt: ${prompt}`);
