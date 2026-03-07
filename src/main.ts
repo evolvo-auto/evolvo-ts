@@ -44,7 +44,7 @@ import { runIssueCommand } from "./issues/runIssueCommand.js";
 import { hasIssueLabel, isChallengeIssue } from "./issues/challengeIssue.js";
 import { TaskIssueManager, type IssueSummary } from "./issues/taskIssueManager.js";
 
-const MAX_ISSUE_CYCLES = 5;
+const MAX_ISSUE_CYCLES = 1;
 const MIN_REPLENISH_ISSUES = 3;
 const MAX_OPEN_ISSUES = 5;
 const RUN_LOOP_GITHUB_MAX_RETRIES = 2;

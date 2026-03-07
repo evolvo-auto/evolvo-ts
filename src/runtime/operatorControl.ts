@@ -195,10 +195,11 @@ export async function requestCycleLimitDecisionFromOperator(
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     console.error(`Discord operator control failed: ${message}`);
-    return {
-      decision: "quit",
-      additionalCycles: 0,
-      source: "discord",
-    };
+    if (message.includes("code\": 50001") || message.toLowerCase().includes("missing access")) {
+      console.error(
+        "Discord bot is missing access to the configured control channel. Verify DISCORD_CONTROL_GUILD_ID, DISCORD_CONTROL_CHANNEL_ID, and bot channel permissions.",
+      );
+    }
+    return null;
   }
 }

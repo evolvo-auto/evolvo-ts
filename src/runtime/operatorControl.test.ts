@@ -99,4 +99,30 @@ describe("operatorControl", () => {
       source: "discord",
     });
   });
+
+  it("returns null when Discord API fails and logs a Missing Access hint", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const fetchSpy = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ message: "Missing Access", code: 50001 }),
+        { status: 403 },
+      ),
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const decision = await requestCycleLimitDecisionFromOperator(100);
+
+    expect(decision).toBeNull();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Discord operator control failed: Discord API request failed (403)"),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      "Discord bot is missing access to the configured control channel. Verify DISCORD_CONTROL_GUILD_ID, DISCORD_CONTROL_CHANNEL_ID, and bot channel permissions.",
+    );
+  });
 });
