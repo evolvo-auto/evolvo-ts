@@ -221,6 +221,60 @@ describe("runCodingAgent", () => {
     );
   });
 
+  it("derives validation command name from env-prefixed commands", async () => {
+    startThreadMock.mockReturnValue({ runStreamed: runStreamedMock });
+    runStreamedMock.mockResolvedValue(createEventStream([
+      {
+        type: "item.started",
+        item: {
+          id: "1",
+          type: "command_execution",
+          command: "CI=1 pnpm test",
+          aggregated_output: "",
+          status: "in_progress",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "1",
+          type: "command_execution",
+          command: "CI=1 pnpm test",
+          exit_code: 0,
+          aggregated_output: "ok",
+          status: "completed",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "2",
+          type: "agent_message",
+          text: "done",
+        },
+      },
+    ]));
+
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(2000)
+      .mockReturnValue(2400);
+
+    const { runCodingAgent } = await import("./runCodingAgent.js");
+    const result = await runCodingAgent("Run validation");
+
+    expect(result.summary.validationCommands).toEqual([
+      expect.objectContaining({
+        command: "CI=1 pnpm test",
+        commandName: "pnpm",
+        exitCode: 0,
+        durationMs: 400,
+      }),
+    ]);
+    expect(console.log).toHaveBeenCalledWith(
+      "[command completed] command=\"CI=1 pnpm test\" name=pnpm exit=0 duration=400ms",
+    );
+  });
+
   it("does not infer pull request merges from agent messages alone", async () => {
     startThreadMock.mockReturnValue({ runStreamed: runStreamedMock });
     runStreamedMock.mockResolvedValue(createEventStream([

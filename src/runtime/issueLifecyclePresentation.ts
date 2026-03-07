@@ -20,8 +20,22 @@ function formatDuration(durationMs: number | null): string {
 }
 
 function getCommandName(command: string): string {
-  const [commandName] = command.trim().split(/\s+/, 1);
-  return commandName || "unknown";
+  const tokens = command.trim().split(/\s+/).filter(Boolean);
+  let cursor = 0;
+
+  if (tokens[cursor] === "env") {
+    cursor += 1;
+    while (tokens[cursor]?.startsWith("-")) {
+      cursor += 1;
+    }
+  }
+
+  while (tokens[cursor]?.includes("=")) {
+    cursor += 1;
+  }
+
+  const commandName = tokens[cursor];
+  return commandName ? commandName.toLowerCase() : "unknown";
 }
 
 function formatValidationCommand(command: CommandExecutionSummary): string {

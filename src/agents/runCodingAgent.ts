@@ -81,8 +81,7 @@ function formatFileChanges(item: Extract<ThreadItem, { type: "file_change" }>): 
 }
 
 function getCommandName(command: string): string {
-  const [commandName] = splitCommandTokens(command);
-  return commandName || "unknown";
+  return parseCommand(command).commandName || "unknown";
 }
 
 function splitCommandTokens(command: string): string[] {

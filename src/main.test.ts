@@ -314,6 +314,30 @@ describe("main", () => {
     );
   });
 
+  it("derives lifecycle validation command name from env-prefixed command text", async () => {
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 18, title: "Validation name fallback", description: "Check env command names", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    runCodingAgentMock.mockResolvedValueOnce({
+      ...DEFAULT_RUN_RESULT,
+      summary: {
+        ...DEFAULT_RUN_RESULT.summary,
+        validationCommands: [{ command: "CI=1 pnpm test", commandName: "", exitCode: 0, durationMs: 155 }],
+        failedValidationCommands: [],
+      },
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(addProgressCommentMock).toHaveBeenCalledWith(
+      18,
+      expect.stringContaining("`CI=1 pnpm test` (name=pnpm, status=0, elapsed=155ms"),
+    );
+  });
+
   it("prefers an issue already in progress", async () => {
     listOpenIssuesMock
       .mockResolvedValueOnce([
