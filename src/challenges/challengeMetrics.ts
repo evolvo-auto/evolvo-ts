@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { readRecoverableJsonState } from "../runtime/localStateFile.js";
 
 const EVOLVO_DIRECTORY_NAME = ".evolvo";
 const CHALLENGE_METRICS_FILE_NAME = "challenge-metrics.json";
@@ -104,20 +105,12 @@ function getMetricsPath(workDir: string): string {
 }
 
 export async function readChallengeMetrics(workDir: string): Promise<ChallengeMetrics> {
-  const metricsPath = getMetricsPath(workDir);
-
-  try {
-    const raw = await fs.readFile(metricsPath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    return normalizeMetricsShape(parsed);
-  } catch (error) {
-    const errorCode = (error as NodeJS.ErrnoException).code;
-    if (errorCode === "ENOENT") {
-      return createDefaultMetrics();
-    }
-
-    throw error;
-  }
+  return readRecoverableJsonState({
+    statePath: getMetricsPath(workDir),
+    createDefaultState: createDefaultMetrics,
+    normalizeState: normalizeMetricsShape,
+    warningLabel: "challenge metrics store",
+  });
 }
 
 async function writeChallengeMetrics(workDir: string, metrics: ChallengeMetrics): Promise<void> {
@@ -184,4 +177,3 @@ export function formatChallengeMetricsReport(metrics: ChallengeMetrics): string 
     `- active pending challenge attempts: ${pendingChallenges}`,
   ].join("\n");
 }
-

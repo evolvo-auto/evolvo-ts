@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { readRecoverableJsonState } from "./localStateFile.js";
 
 const EVOLVO_DIRECTORY_NAME = ".evolvo";
 const LIFECYCLE_STATE_FILE_NAME = "runtime-lifecycle-state.json";
@@ -105,23 +106,11 @@ function getStatePath(workDir: string): string {
   return join(workDir, EVOLVO_DIRECTORY_NAME, LIFECYCLE_STATE_FILE_NAME);
 }
 
-function getCorruptStatePath(workDir: string, atMs = Date.now()): string {
-  return join(
-    workDir,
-    EVOLVO_DIRECTORY_NAME,
-    `runtime-lifecycle-state.corrupt-${Math.max(0, Math.floor(atMs))}.json`,
-  );
-}
-
 function createDefaultStateStore(): LifecycleStateStore {
   return {
     version: LIFECYCLE_STATE_VERSION,
     issues: {},
   };
-}
-
-function isMalformedStateStoreError(error: unknown): boolean {
-  return error instanceof SyntaxError;
 }
 
 function normalizeStateStore(raw: unknown): LifecycleStateStore {
@@ -197,37 +186,17 @@ function normalizeStateStore(raw: unknown): LifecycleStateStore {
 }
 
 export async function readCanonicalLifecycleState(workDir: string): Promise<LifecycleStateStore> {
-  const statePath = getStatePath(workDir);
-  try {
-    const raw = await fs.readFile(statePath, "utf8");
-    return normalizeStateStore(JSON.parse(raw) as unknown);
-  } catch (error) {
-    const errorCode = (error as NodeJS.ErrnoException).code;
-    if (errorCode === "ENOENT") {
-      return createDefaultStateStore();
-    }
-    if (isMalformedStateStoreError(error)) {
-      return recoverMalformedLifecycleState(workDir, statePath);
-    }
-
-    throw error;
-  }
+  return readRecoverableJsonState({
+    statePath: getStatePath(workDir),
+    createDefaultState: createDefaultStateStore,
+    normalizeState: normalizeStateStore,
+    warningLabel: "lifecycle state store",
+  });
 }
 
 async function writeCanonicalLifecycleState(workDir: string, state: LifecycleStateStore): Promise<void> {
   await fs.mkdir(join(workDir, EVOLVO_DIRECTORY_NAME), { recursive: true });
   await fs.writeFile(getStatePath(workDir), `${JSON.stringify(normalizeStateStore(state), null, 2)}\n`, "utf8");
-}
-
-async function recoverMalformedLifecycleState(workDir: string, statePath: string): Promise<LifecycleStateStore> {
-  const corruptPath = getCorruptStatePath(workDir);
-  await fs.rename(statePath, corruptPath);
-  const defaultStateStore = createDefaultStateStore();
-  await writeCanonicalLifecycleState(workDir, defaultStateStore);
-  console.warn(
-    `Recovered malformed lifecycle state store at ${statePath}; preserved corrupt file at ${corruptPath}.`,
-  );
-  return defaultStateStore;
 }
 
 export async function transitionCanonicalLifecycleState(

@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   formatChallengeMetricsReport,
   readChallengeMetrics,
@@ -16,6 +16,8 @@ describe("challengeMetrics", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     await Promise.all(tempDirs.map((directory) => rm(directory, { recursive: true, force: true })));
     tempDirs.length = 0;
   });
@@ -159,5 +161,49 @@ describe("challengeMetrics", () => {
 
     expect(metrics.categoryCounts).toEqual({ unknown: 1 });
   });
-});
 
+  it("recovers malformed metrics JSON by preserving the corrupt file and resetting defaults", async () => {
+    vi.useFakeTimers();
+    const recoveryAtMs = new Date("2026-03-07T22:20:00.000Z").getTime();
+    vi.setSystemTime(recoveryAtMs);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const evolvoDir = join(workDir, ".evolvo");
+    const statePath = join(evolvoDir, "challenge-metrics.json");
+    const corruptPath = join(evolvoDir, `challenge-metrics.corrupt-${recoveryAtMs}.json`);
+    await mkdir(evolvoDir, { recursive: true });
+    await writeFile(statePath, "{\"total\":", "utf8");
+
+    const metrics = await readChallengeMetrics(workDir);
+
+    expect(metrics).toEqual({
+      total: 0,
+      success: 0,
+      failure: 0,
+      attemptsToSuccess: {
+        total: 0,
+        samples: 0,
+        average: 0,
+      },
+      categoryCounts: {},
+      pendingAttemptsByChallenge: {},
+    });
+    expect(await readFile(corruptPath, "utf8")).toBe("{\"total\":");
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual({
+      total: 0,
+      success: 0,
+      failure: 0,
+      attemptsToSuccess: {
+        total: 0,
+        samples: 0,
+        average: 0,
+      },
+      categoryCounts: {},
+      pendingAttemptsByChallenge: {},
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      `Recovered malformed challenge metrics store at ${statePath}; preserved corrupt file at ${corruptPath}.`,
+    );
+  });
+});

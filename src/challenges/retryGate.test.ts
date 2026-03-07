@@ -1,7 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IssueSummary } from "../issues/taskIssueManager.js";
 import {
   CHALLENGE_BLOCKED_LABEL,
@@ -31,6 +31,8 @@ describe("retryGate", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     await Promise.all(tempDirs.map((directory) => rm(directory, { recursive: true, force: true })));
     tempDirs.length = 0;
   });
@@ -250,5 +252,28 @@ describe("retryGate", () => {
     });
     const stateAfterSuccess = await readChallengeRetryState(workDir);
     expect(stateAfterSuccess.failuresByChallenge).toEqual({});
+  });
+
+  it("recovers malformed retry state JSON by preserving the corrupt file and resetting defaults", async () => {
+    vi.useFakeTimers();
+    const recoveryAtMs = new Date("2026-03-07T22:10:00.000Z").getTime();
+    vi.setSystemTime(recoveryAtMs);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const evolvoDir = join(workDir, ".evolvo");
+    const statePath = join(evolvoDir, "challenge-retry-state.json");
+    const corruptPath = join(evolvoDir, `challenge-retry-state.corrupt-${recoveryAtMs}.json`);
+    await mkdir(evolvoDir, { recursive: true });
+    await writeFile(statePath, "{\"failuresByChallenge\":", "utf8");
+
+    const state = await readChallengeRetryState(workDir);
+
+    expect(state).toEqual({ failuresByChallenge: {} });
+    expect(await readFile(corruptPath, "utf8")).toBe("{\"failuresByChallenge\":");
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual({ failuresByChallenge: {} });
+    expect(warnSpy).toHaveBeenCalledWith(
+      `Recovered malformed challenge retry state store at ${statePath}; preserved corrupt file at ${corruptPath}.`,
+    );
   });
 });

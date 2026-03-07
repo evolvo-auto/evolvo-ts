@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { hasIssueLabel, isChallengeIssue } from "../issues/challengeIssue.js";
 import type { IssueSummary } from "../issues/taskIssueManager.js";
+import { readRecoverableJsonState } from "../runtime/localStateFile.js";
 
 const EVOLVO_DIRECTORY_NAME = ".evolvo";
 const CHALLENGE_RETRY_STATE_FILE_NAME = "challenge-retry-state.json";
@@ -109,19 +110,12 @@ function getManagedLabelChanges(issue: IssueSummary, addLabels: string[]): { add
 }
 
 export async function readChallengeRetryState(workDir: string): Promise<ChallengeRetryState> {
-  const retryStatePath = getRetryStatePath(workDir);
-
-  try {
-    const raw = await fs.readFile(retryStatePath, "utf8");
-    return normalizeRetryState(JSON.parse(raw) as unknown);
-  } catch (error) {
-    const errorCode = (error as NodeJS.ErrnoException).code;
-    if (errorCode === "ENOENT") {
-      return createDefaultRetryState();
-    }
-
-    throw error;
-  }
+  return readRecoverableJsonState({
+    statePath: getRetryStatePath(workDir),
+    createDefaultState: createDefaultRetryState,
+    normalizeState: normalizeRetryState,
+    warningLabel: "challenge retry state store",
+  });
 }
 
 async function writeChallengeRetryState(workDir: string, state: ChallengeRetryState): Promise<void> {
