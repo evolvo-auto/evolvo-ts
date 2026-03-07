@@ -19,6 +19,14 @@ function formatDuration(durationMs: number | null): string {
   return `${Math.round(durationMs)}ms`;
 }
 
+function formatDurationMsValue(durationMs: number | null): string {
+  if (durationMs === null || !Number.isFinite(durationMs) || durationMs < 0) {
+    return "unknown";
+  }
+
+  return String(Math.round(durationMs));
+}
+
 function getCommandName(command: string): string {
   const tokens = command.trim().split(/\s+/).filter(Boolean);
   let cursor = 0;
@@ -40,12 +48,13 @@ function getCommandName(command: string): string {
 
 function formatValidationCommand(command: CommandExecutionSummary): string {
   const commandName = typeof command.commandName === "string" && command.commandName.trim().length > 0
-    ? command.commandName
+    ? command.commandName.trim()
     : getCommandName(command.command);
   const exitCode = command.exitCode === null ? "unknown" : String(command.exitCode);
   const duration = formatDuration(command.durationMs);
+  const durationMsValue = formatDurationMsValue(command.durationMs);
   const outcome = command.exitCode === null ? "unknown" : command.exitCode === 0 ? "passed" : "failed";
-  return `- \`${command.command}\` (name=${commandName}, status=${exitCode}, elapsed=${duration}, exit_code=${exitCode}, duration_ms=${duration}, outcome=${outcome})`;
+  return `- \`${command.command}\` (name=${commandName}, status=${exitCode}, elapsed=${duration}, exit_code=${exitCode}, duration_ms=${durationMsValue}, outcome=${outcome})`;
 }
 
 function summarizeRetryNotes(result: CodingAgentRunResult): string {
