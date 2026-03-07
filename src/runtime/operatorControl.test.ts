@@ -15,6 +15,18 @@ async function createTempWorkDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "operator-control-"));
 }
 
+function createDiscordControlMessage(id: number, content: string, authorId = "someone"): {
+  id: string;
+  content: string;
+  author: { id: string };
+} {
+  return {
+    id: String(id),
+    content,
+    author: { id: authorId },
+  };
+}
+
 describe("operatorControl", () => {
   const tempDirs: string[] = [];
 
@@ -438,57 +450,118 @@ describe("operatorControl", () => {
     );
   });
 
-  it("does not advance the Discord control cursor past a command that fails before processing completes", async () => {
+  it("drains Discord control backlogs larger than one page before advancing the cursor", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
     vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
     vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
     vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+    await gracefulShutdown.writeDiscordControlCursor(workDir, "9000");
 
-    const recordRequestSpy = vi.spyOn(gracefulShutdown, "recordGracefulShutdownRequest")
-      .mockRejectedValueOnce(new Error("simulated cursor-ordering failure"));
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const firstPage = Array.from({ length: 50 }, (_, index) => createDiscordControlMessage(9001 + index, `noise-${index}`));
+    const secondPage = Array.from({ length: 10 }, (_, index) => {
+      const id = 9051 + index;
+      if (id === 9058) {
+        return createDiscordControlMessage(id, "/quit", "operator-1");
+      }
+
+      return createDiscordControlMessage(id, `noise-${id}`);
+    });
     const fetchSpy = vi.fn()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify([{ id: "7400", content: "boot", author: { id: "someone" } }]), { status: 200 }),
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([{ id: "7401", content: "/quit", author: { id: "operator-1" } }]),
-          { status: 200 },
-        ),
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([{ id: "7401", content: "/quit", author: { id: "operator-1" } }]),
-          { status: 200 },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-replayed" }), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify(firstPage), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(secondPage), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-backlog" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);
 
-    const firstRequest = await pollDiscordGracefulShutdownCommand(workDir);
+    const request = await pollDiscordGracefulShutdownCommand(workDir);
+
+    expect(request).toEqual({
+      version: 1,
+      source: "discord",
+      command: "/quit",
+      mode: "after-current-task",
+      messageId: "9058",
+      requestedAt: expect.any(String),
+    });
+    expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("9060");
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      1,
+      "https://discord.com/api/v10/channels/channel-1/messages?limit=50&after=9000",
+      expect.any(Object),
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "https://discord.com/api/v10/channels/channel-1/messages?limit=50&after=9050",
+      expect.any(Object),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the Discord control cursor at the batch start when a later message fails mid-batch", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+    await gracefulShutdown.writeDiscordControlCursor(workDir, "9400");
+
+    const recordReceiptSpy = vi.spyOn(gracefulShutdown, "recordDiscordControlCommandReceipt")
+      .mockRejectedValueOnce(new Error("simulated mid-batch failure"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onStartProject = vi.fn().mockResolvedValue({
+      ok: true,
+      message: "Created issue #556.",
+      issueNumber: 556,
+      issueUrl: "https://github.com/evolvo-auto/evolvo-ts/issues/556",
+    });
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            createDiscordControlMessage(9401, "/quit", "operator-1"),
+            createDiscordControlMessage(9402, "/startProject Habit CLI", "operator-1"),
+          ]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-quit" }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            createDiscordControlMessage(9401, "/quit", "operator-1"),
+            createDiscordControlMessage(9402, "/startProject Habit CLI", "operator-1"),
+          ]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-replayed-start-project" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const firstRequest = await pollDiscordGracefulShutdownCommand(workDir, { onStartProject });
 
     expect(firstRequest).toBeNull();
-    expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("7400");
+    expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("9400");
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Discord graceful shutdown polling failed: [read-control-commands] simulated cursor-ordering failure"),
+      expect.stringContaining("Discord graceful shutdown polling failed: [read-control-commands] simulated mid-batch failure"),
     );
+    expect(onStartProject).not.toHaveBeenCalled();
 
-    recordRequestSpy.mockRestore();
+    recordReceiptSpy.mockRestore();
 
-    const replayedRequest = await pollDiscordGracefulShutdownCommand(workDir);
+    const replayedRequest = await pollDiscordGracefulShutdownCommand(workDir, { onStartProject });
 
     expect(replayedRequest).toEqual({
       version: 1,
       source: "discord",
       command: "/quit",
       mode: "after-current-task",
-      messageId: "7401",
+      messageId: "9401",
       requestedAt: expect.any(String),
     });
-    expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("7401");
+    expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("9402");
+    expect(onStartProject).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledTimes(4);
   });
 
