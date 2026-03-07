@@ -913,6 +913,44 @@ describe("main", () => {
     );
   });
 
+  it("retries transient network TypeError failures and recovers", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce([
+        { number: 60, title: "Network recovery", description: "retry typeerror", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(listOpenIssuesMock).toHaveBeenCalledTimes(3);
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #60: Network recovery\n\nretry typeerror");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("Transient GitHub issue sync failure on cycle 1 (attempt 1/2). Retrying in 50ms."),
+    );
+  });
+
+  it("retries transient timeout errors and recovers", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockRejectedValueOnce(new Error("GitHub API request timed out after 5000ms"))
+      .mockResolvedValueOnce([
+        { number: 61, title: "Timeout recovery", description: "retry timeout", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(listOpenIssuesMock).toHaveBeenCalledTimes(3);
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #61: Timeout recovery\n\nretry timeout");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("Transient GitHub issue sync failure on cycle 1 (attempt 1/2). Retrying in 50ms."),
+    );
+  });
+
   it("does not retry non-transient GitHub 403 failures", async () => {
     process.argv = ["node", "test-runner.ts"];
     listOpenIssuesMock.mockRejectedValue(
