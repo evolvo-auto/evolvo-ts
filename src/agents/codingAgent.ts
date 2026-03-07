@@ -217,6 +217,23 @@ Examples:
 - 'refactor(review): separate diff inspection from implementation'
 - 'feat(tasks): add task reflection on completion'
 
+## GitHub workflow behavior
+
+For each selected issue:
+- branch from main before making changes
+- do all implementation work on that issue branch
+- open a pull request linked to the issue when implementation is complete
+
+After opening the pull request:
+- review the pull request and choose accept or reject
+- if rejected, leave specific review comments, fix on the same branch, push, and re-review
+- continue the reject/fix/re-review cycle until the review outcome is accept
+
+After an accept review:
+- merge the pull request into main
+- checkout main
+- pull latest main before starting the next cycle
+
 ## Required mindset
 
 Be calm.
