@@ -33,6 +33,7 @@ export type IssueActionResult = {
 export type ReplenishIssuesOptions = {
   minimumIssueCount: number;
   maximumOpenIssues: number;
+  templates?: IssueTemplate[];
 };
 
 export type ReplenishIssuesResult = {
@@ -155,6 +156,10 @@ export class TaskIssueManager {
   public async replenishSelfImprovementIssues(options: ReplenishIssuesOptions): Promise<ReplenishIssuesResult> {
     const minimumIssueCount = Math.max(0, Math.floor(options.minimumIssueCount));
     const maximumOpenIssues = Math.max(0, Math.floor(options.maximumOpenIssues));
+    const baseTemplates =
+      options.templates && options.templates.length > 0
+        ? options.templates
+        : SELF_IMPROVEMENT_ISSUE_TEMPLATES;
 
     if (minimumIssueCount === 0 || maximumOpenIssues === 0) {
       return { created: [] };
@@ -176,28 +181,11 @@ export class TaskIssueManager {
     );
 
     const toCreateCount = Math.min(remainingOpenSlots, minimumIssueCount);
-    const templates: IssueTemplate[] = [];
-    let followUpSequence = 1;
-    for (const template of SELF_IMPROVEMENT_ISSUE_TEMPLATES) {
-      if (templates.length >= toCreateCount) {
-        break;
-      }
-
-      const normalizedTitle = template.title.trim().toLowerCase();
-      if (!existingTitles.has(normalizedTitle)) {
-        templates.push(template);
-        existingTitles.add(normalizedTitle);
-        continue;
-      }
-
-      const followUpTemplate = buildFollowUpTemplate(template, followUpSequence);
-      followUpSequence += 1;
-      const normalizedFollowUpTitle = followUpTemplate.title.trim().toLowerCase();
-      if (!existingTitles.has(normalizedFollowUpTitle)) {
-        templates.push(followUpTemplate);
-        existingTitles.add(normalizedFollowUpTitle);
-      }
-    }
+    const templates = selectTemplatesForCreation({
+      baseTemplates,
+      toCreateCount,
+      existingTitles,
+    });
 
     const created: IssueSummary[] = [];
     for (const template of templates) {
@@ -329,6 +317,43 @@ export class TaskIssueManager {
       throw error;
     }
   }
+}
+
+function selectTemplatesForCreation(options: {
+  baseTemplates: IssueTemplate[];
+  toCreateCount: number;
+  existingTitles: Set<string>;
+}): IssueTemplate[] {
+  if (options.toCreateCount <= 0 || options.baseTemplates.length === 0) {
+    return [];
+  }
+
+  const selected: IssueTemplate[] = [];
+  const followUpSequenceByTemplate = new Map<string, number>();
+  let cursor = 0;
+  const maxAttempts = Math.max(options.baseTemplates.length * options.toCreateCount * 4, 20);
+
+  while (selected.length < options.toCreateCount && cursor < maxAttempts) {
+    const template = options.baseTemplates[cursor % options.baseTemplates.length];
+    if (!template) {
+      break;
+    }
+
+    const key = template.title.trim().toLowerCase();
+    const sequence = followUpSequenceByTemplate.get(key) ?? 0;
+    const candidate = sequence === 0 ? template : buildFollowUpTemplate(template, sequence);
+    const normalizedTitle = candidate.title.trim().toLowerCase();
+
+    if (normalizedTitle && !options.existingTitles.has(normalizedTitle)) {
+      selected.push(candidate);
+      options.existingTitles.add(normalizedTitle);
+      cursor += 1;
+    }
+
+    followUpSequenceByTemplate.set(key, sequence + 1);
+  }
+
+  return selected;
 }
 
 export { COMPLETED_LABEL, IN_PROGRESS_LABEL };

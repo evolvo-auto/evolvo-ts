@@ -8,6 +8,7 @@ const listOpenIssuesMock = vi.fn();
 const markInProgressMock = vi.fn();
 const closeIssueMock = vi.fn();
 const replenishSelfImprovementIssuesMock = vi.fn();
+const generateStartupIssueTemplatesMock = vi.fn();
 const runPostMergeSelfRestartMock = vi.fn();
 
 vi.mock("./environment.js", () => ({
@@ -25,6 +26,10 @@ vi.mock("./agents/runCodingAgent.js", () => ({
 
 vi.mock("./runtime/selfRestart.js", () => ({
   runPostMergeSelfRestart: runPostMergeSelfRestartMock,
+}));
+
+vi.mock("./issues/startupIssueBootstrap.js", () => ({
+  generateStartupIssueTemplates: generateStartupIssueTemplatesMock,
 }));
 
 vi.mock("./issues/runIssueCommand.js", () => ({
@@ -81,6 +86,8 @@ describe("main", () => {
     closeIssueMock.mockResolvedValue({ ok: true, message: "closed" });
     replenishSelfImprovementIssuesMock.mockReset();
     replenishSelfImprovementIssuesMock.mockResolvedValue({ created: [] });
+    generateStartupIssueTemplatesMock.mockReset();
+    generateStartupIssueTemplatesMock.mockResolvedValue([]);
     process.argv = ["node", "src/main.ts"];
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -177,6 +184,11 @@ describe("main", () => {
   });
 
   it("replenishes issues and continues when queue is empty", async () => {
+    generateStartupIssueTemplatesMock.mockResolvedValueOnce([
+      { title: "Startup issue", description: "from repo analysis" },
+      { title: "Startup issue 2", description: "from repo analysis" },
+      { title: "Startup issue 3", description: "from repo analysis" },
+    ]);
     listOpenIssuesMock
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
@@ -191,17 +203,42 @@ describe("main", () => {
     await main();
 
     expect(DEFAULT_PROMPT).toBeDefined();
-    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
+    expect(generateStartupIssueTemplatesMock).toHaveBeenCalledWith("/tmp/evolvo", { targetCount: 3 });
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({
+      minimumIssueCount: 3,
+      maximumOpenIssues: 5,
+      templates: [
+        { title: "Startup issue", description: "from repo analysis" },
+        { title: "Startup issue 2", description: "from repo analysis" },
+        { title: "Startup issue 3", description: "from repo analysis" },
+      ],
+    });
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #19: Generated\n\ngenerated");
+    expect(console.log).toHaveBeenCalledWith(
+      "No open issues found on startup. Bootstrapped issue queue from repository analysis.",
+    );
   });
 
   it("logs and exits when no issues are open and replenishment creates nothing", async () => {
+    generateStartupIssueTemplatesMock.mockResolvedValueOnce([
+      { title: "Startup issue", description: "from repo analysis" },
+      { title: "Startup issue 2", description: "from repo analysis" },
+      { title: "Startup issue 3", description: "from repo analysis" },
+    ]);
     const { DEFAULT_PROMPT, main } = await import("./main.js");
 
     await main();
 
     expect(runCodingAgentMock).not.toHaveBeenCalled();
-    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({
+      minimumIssueCount: 3,
+      maximumOpenIssues: 5,
+      templates: [
+        { title: "Startup issue", description: "from repo analysis" },
+        { title: "Startup issue 2", description: "from repo analysis" },
+        { title: "Startup issue 3", description: "from repo analysis" },
+      ],
+    });
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
   });
 

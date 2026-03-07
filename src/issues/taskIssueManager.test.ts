@@ -154,6 +154,36 @@ describe("TaskIssueManager", () => {
     );
   });
 
+  it("supports startup-provided templates and creates follow-up titles when needed", async () => {
+    const client = createClientMock();
+    client.get
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([createIssue({ number: 9, state: "closed", title: "Improve startup bootstrap logging" })]);
+    client.post
+      .mockResolvedValueOnce(createIssue({ number: 41, title: "Improve startup bootstrap logging (follow-up 1)" }))
+      .mockResolvedValueOnce(createIssue({ number: 42, title: "Add startup queue health metric emission" }))
+      .mockResolvedValueOnce(createIssue({ number: 43, title: "Harden startup fallback diagnostics" }));
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.replenishSelfImprovementIssues({
+      minimumIssueCount: 3,
+      maximumOpenIssues: 5,
+      templates: [
+        { title: "Improve startup bootstrap logging", description: "Improve logs." },
+        { title: "Add startup queue health metric emission", description: "Emit metrics." },
+        { title: "Harden startup fallback diagnostics", description: "Improve diagnostics." },
+      ],
+    });
+
+    expect(result.created).toHaveLength(3);
+    expect(result.created.map((issue) => issue.title)).toEqual([
+      "Improve startup bootstrap logging (follow-up 1)",
+      "Add startup queue health metric emission",
+      "Harden startup fallback diagnostics",
+    ]);
+    expect(client.post).toHaveBeenCalledTimes(3);
+  });
+
   it("marks an issue in progress", async () => {
     const client = createClientMock();
     client.get.mockResolvedValue(createIssue({ labels: [{ name: "bug" }] }));
