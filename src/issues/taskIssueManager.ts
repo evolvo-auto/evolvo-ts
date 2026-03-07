@@ -431,10 +431,7 @@ export class TaskIssueManager {
       return { created: [] };
     }
 
-    const recentClosed = await this.client.get<GitHubIssue[]>(
-      `?state=closed&sort=updated&direction=desc&per_page=${TaskIssueManager.ISSUES_PER_PAGE}&page=1`,
-    );
-    const recentClosedIssues = recentClosed.filter((issue) => issue.pull_request === undefined);
+    const recentClosedIssues = await this.listRecentClosedIssues(PLANNED_ISSUE_RECENT_CLOSED_LOOKBACK_LIMIT);
     const existingTitles = new Set(
       [...openIssues.map((issue) => issue.title), ...recentClosedIssues.map((issue) => issue.title)].map((title) =>
         title.trim().toLowerCase(),

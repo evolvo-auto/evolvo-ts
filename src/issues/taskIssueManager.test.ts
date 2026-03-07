@@ -535,6 +535,38 @@ describe("TaskIssueManager", () => {
     );
   });
 
+  it("uses later closed-issue pages to force follow-up bootstrap titles instead of recreating the base title", async () => {
+    const client = createClientMock();
+    const firstClosedPage = Array.from({ length: 100 }, (_, index) =>
+      createIssue({
+        number: index + 1,
+        state: "closed",
+        title: `Closed issue ${index + 1}`,
+      }),
+    );
+    client.get
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(firstClosedPage)
+      .mockResolvedValueOnce([
+        createIssue({ number: 101, state: "closed", title: "Template A" }),
+      ]);
+    client.post.mockResolvedValueOnce(createIssue({ number: 401, title: "Template A (follow-up 1)" }));
+
+    const manager = new TaskIssueManager(client as never);
+    const result = await manager.replenishSelfImprovementIssues({
+      minimumIssueCount: 1,
+      maximumOpenIssues: 5,
+      templates: [{ title: "Template A", description: "Startup duplicate should become a follow-up." }],
+    });
+
+    expect(client.get).toHaveBeenNthCalledWith(2, "?state=closed&sort=updated&direction=desc&per_page=100&page=1");
+    expect(client.get).toHaveBeenNthCalledWith(3, "?state=closed&sort=updated&direction=desc&per_page=100&page=2");
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0]?.title).toBe("Template A (follow-up 1)");
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(client.post).toHaveBeenCalledWith("", expect.objectContaining({ title: "Template A (follow-up 1)" }));
+  });
+
   it("marks an issue in progress", async () => {
     const client = createClientMock();
     client.get.mockResolvedValue(createIssue({ labels: [{ name: "bug" }] }));
