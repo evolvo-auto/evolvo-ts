@@ -3,6 +3,7 @@ import "dotenv/config";
 import { pathToFileURL } from "node:url";
 import { WORK_DIR } from "./constants/workDir.js";
 import { runCodingAgent } from "./agents/runCodingAgent.js";
+import { runPostMergeSelfRestart } from "./runtime/selfRestart.js";
 import { runIssueCommand } from "./issues/runIssueCommand.js";
 import { getGitHubConfig } from "./github/githubConfig.js";
 import { GitHubApiError, GitHubClient } from "./github/githubClient.js";
@@ -127,9 +128,26 @@ export async function main(): Promise<void> {
       const prompt = buildPromptFromIssue(selectedIssue);
       console.log(`Prompt: ${prompt}`);
 
-      await runCodingAgent(prompt).catch((error) => {
+      const runResult = await runCodingAgent(prompt).catch((error) => {
         console.error("Error running the coding agent:", error);
+        return null;
       });
+
+      if (runResult?.mergedPullRequest) {
+        console.log("Merged pull request detected. Running post-merge restart workflow.");
+        try {
+          await runPostMergeSelfRestart(WORK_DIR);
+          console.log("Post-merge restart workflow completed. Exiting current runtime.");
+        } catch (error) {
+          if (error instanceof Error) {
+            console.error(error.message);
+          } else {
+            console.error("Post-merge restart failed with an unknown error.");
+          }
+        }
+
+        return;
+      }
     } catch (error) {
       logGitHubFallback(error);
       if (cycle === 1) {

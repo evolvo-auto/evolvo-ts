@@ -65,7 +65,7 @@ describe("runCodingAgent", () => {
 
     await expect(
       runCodingAgent("Create src/utils/add.ts"),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ mergedPullRequest: false });
 
     expect(startThreadMock).toHaveBeenCalledTimes(1);
     expect(runStreamedMock).toHaveBeenCalledWith("PROMPT:Create src/utils/add.ts");
@@ -108,6 +108,34 @@ describe("runCodingAgent", () => {
 
     await expect(
       runCodingAgent("Summarize the repository"),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ mergedPullRequest: false });
+  });
+
+  it("flags successful pull request merges from command events", async () => {
+    startThreadMock.mockReturnValue({ runStreamed: runStreamedMock });
+    runStreamedMock.mockResolvedValue(createEventStream([
+      {
+        type: "item.completed",
+        item: {
+          id: "1",
+          type: "command_execution",
+          command: "gh pr merge 15 --merge --delete-branch",
+          exit_code: 0,
+          aggregated_output: "Merged",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "2",
+          type: "agent_message",
+          text: "done",
+        },
+      },
+    ]));
+
+    const { runCodingAgent } = await import("./runCodingAgent.js");
+
+    await expect(runCodingAgent("Merge and continue")).resolves.toEqual({ mergedPullRequest: true });
   });
 });

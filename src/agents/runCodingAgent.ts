@@ -6,6 +6,11 @@ import {
 
 const codex = new Codex();
 let activeThread: Thread | null = null;
+const MERGE_PR_COMMAND_PATTERN = /\bgh\s+pr\s+merge\b/i;
+
+export type CodingAgentRunResult = {
+  mergedPullRequest: boolean;
+};
 
 function getThread(): Thread {
   if (!activeThread) {
@@ -64,7 +69,7 @@ function logStartedItem(item: ThreadItem): void {
   }
 }
 
-export async function runCodingAgent(prompt: string): Promise<void> {
+export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResult> {
   console.log("=== Run starting ===");
   console.log(`[user] ${prompt}\n`);
 
@@ -74,6 +79,7 @@ export async function runCodingAgent(prompt: string): Promise<void> {
   const startedItems = new Set<string>();
   const completedItems = new Set<string>();
   let fileChangeSeen = false;
+  let mergedPullRequest = false;
   let finalResponse = "";
 
   for await (const event of events) {
@@ -109,6 +115,14 @@ export async function runCodingAgent(prompt: string): Promise<void> {
         finalResponse = event.item.text;
       }
 
+      if (
+        event.item.type === "command_execution" &&
+        event.item.exit_code === 0 &&
+        MERGE_PR_COMMAND_PATTERN.test(event.item.command)
+      ) {
+        mergedPullRequest = true;
+      }
+
       logCompletedItem(event.item);
       continue;
     }
@@ -128,7 +142,7 @@ export async function runCodingAgent(prompt: string): Promise<void> {
 
   if (fileChangeSeen) {
     console.log("\n[file_change] One or more repository edits were executed.");
-    return;
+    return { mergedPullRequest };
   }
 
   console.log("\n[file_change] No repository edits were detected.");
@@ -136,4 +150,6 @@ export async function runCodingAgent(prompt: string): Promise<void> {
   if (isFileEditRequest(prompt)) {
     throw new Error("The Codex run did not make repository edits for a file-edit request.");
   }
+
+  return { mergedPullRequest };
 }

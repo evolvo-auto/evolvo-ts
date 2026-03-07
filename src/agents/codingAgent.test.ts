@@ -18,6 +18,9 @@ describe("buildCodingPrompt", () => {
     expect(prompt).toContain("open a pull request linked to the issue");
     expect(prompt).toContain("continue the reject/fix/re-review cycle until the review outcome is accept");
     expect(prompt).toContain("merge the pull request into main");
+    expect(prompt).toContain("run `pnpm i`");
+    expect(prompt).toContain("run `pnpm build`");
+    expect(prompt).toContain("run `pnpm start`");
   });
 
   it("requires a continuous issue loop after each completion", () => {

@@ -8,6 +8,7 @@ const listOpenIssuesMock = vi.fn();
 const markInProgressMock = vi.fn();
 const closeIssueMock = vi.fn();
 const replenishSelfImprovementIssuesMock = vi.fn();
+const runPostMergeSelfRestartMock = vi.fn();
 
 vi.mock("./environment.js", () => ({
   GITHUB_OWNER: "owner",
@@ -20,6 +21,10 @@ vi.mock("./constants/workDir.js", () => ({
 
 vi.mock("./agents/runCodingAgent.js", () => ({
   runCodingAgent: runCodingAgentMock,
+}));
+
+vi.mock("./runtime/selfRestart.js", () => ({
+  runPostMergeSelfRestart: runPostMergeSelfRestartMock,
 }));
 
 vi.mock("./issues/runIssueCommand.js", () => ({
@@ -56,7 +61,9 @@ describe("main", () => {
   beforeEach(() => {
     vi.resetModules();
     runCodingAgentMock.mockReset();
-    runCodingAgentMock.mockResolvedValue(undefined);
+    runCodingAgentMock.mockResolvedValue({ mergedPullRequest: false });
+    runPostMergeSelfRestartMock.mockReset();
+    runPostMergeSelfRestartMock.mockResolvedValue(undefined);
     runIssueCommandMock.mockReset();
     runIssueCommandMock.mockResolvedValue(false);
     getGitHubConfigMock.mockReset();
@@ -142,6 +149,31 @@ describe("main", () => {
 
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(1, "Issue #7: First\n\nfirst");
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(2, "Issue #8: Second\n\nsecond");
+  });
+
+  it("runs post-merge restart workflow when a pull request merge is detected", async () => {
+    listOpenIssuesMock.mockResolvedValueOnce([
+      { number: 11, title: "Restart flow", description: "Restart", state: "open", labels: [] },
+    ]);
+    runCodingAgentMock.mockResolvedValueOnce({ mergedPullRequest: true });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
+  });
+
+  it("logs restart failures clearly and exits current runtime", async () => {
+    listOpenIssuesMock.mockResolvedValueOnce([
+      { number: 21, title: "Restart fail path", description: "Restart", state: "open", labels: [] },
+    ]);
+    runCodingAgentMock.mockResolvedValueOnce({ mergedPullRequest: true });
+    runPostMergeSelfRestartMock.mockRejectedValueOnce(new Error("restart failed"));
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(console.error).toHaveBeenCalledWith("restart failed");
   });
 
   it("replenishes issues and continues when queue is empty", async () => {

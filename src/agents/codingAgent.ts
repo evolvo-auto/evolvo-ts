@@ -233,6 +233,10 @@ After an accept review:
 - merge the pull request into main
 - checkout main
 - pull latest main before starting the next cycle
+- run \`pnpm i\`
+- run \`pnpm build\`
+- run \`pnpm start\`
+- confirm the restart succeeded before continuing
 
 ## Required mindset
 
