@@ -306,7 +306,7 @@ describe("main", () => {
     );
     expect(addProgressCommentMock).toHaveBeenCalledWith(
       13,
-      expect.stringContaining("duration_ms=321ms"),
+      expect.stringContaining("duration_ms=321"),
     );
     expect(addProgressCommentMock).toHaveBeenCalledWith(
       13,
@@ -335,6 +335,31 @@ describe("main", () => {
     expect(addProgressCommentMock).toHaveBeenCalledWith(
       18,
       expect.stringContaining("`CI=1 pnpm test` (name=pnpm, status=0, elapsed=155ms"),
+    );
+  });
+
+  it("logs unknown validation status and duration fields when command metadata is missing", async () => {
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 20, title: "Validation unknown fields", description: "unknown status", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    runCodingAgentMock.mockResolvedValueOnce({
+      ...DEFAULT_RUN_RESULT,
+      summary: {
+        ...DEFAULT_RUN_RESULT.summary,
+        validationCommands: [{ command: "pnpm test", commandName: "", exitCode: null, durationMs: null }],
+        failedValidationCommands: [{ command: "pnpm test", commandName: "", exitCode: null, durationMs: null }],
+        reviewOutcome: "amended",
+      },
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(addProgressCommentMock).toHaveBeenCalledWith(
+      20,
+      expect.stringContaining("`pnpm test` (name=pnpm, status=unknown, elapsed=unknown, exit_code=unknown, duration_ms=unknown, outcome=unknown)"),
     );
   });
 
