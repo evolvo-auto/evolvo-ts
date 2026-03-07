@@ -114,10 +114,11 @@ pnpm validate
 Current validation pipeline:
 
 1. `pnpm typecheck`
-2. `pnpm build`
-3. `pnpm test`
+2. `pnpm lint`
+3. `pnpm build`
+4. `pnpm test`
 
-If full validation is too slow while narrowing failures, run targeted commands first (`pnpm test`, `pnpm typecheck`) then re-run `pnpm validate` before final acceptance.
+If full validation is too slow while narrowing failures, run targeted commands first (`pnpm test`, `pnpm typecheck`, `pnpm lint`) then re-run `pnpm validate` before final acceptance.
 
 ## Recovery Guide
 
@@ -182,8 +183,9 @@ pnpm dev -- issues close <issueNumber>
 
 ```bash
 pnpm dev        # run runtime in tsx
+pnpm lint       # compiler-backed unused-code/static analysis
 pnpm build      # compile to dist
 pnpm start      # run compiled runtime
 pnpm test       # run vitest
-pnpm validate   # typecheck + build + test
+pnpm validate   # typecheck + lint + build + test
 ```

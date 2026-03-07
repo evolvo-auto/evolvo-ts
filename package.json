@@ -7,10 +7,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "validate": "pnpm typecheck && pnpm build && pnpm test",
+    "validate": "pnpm typecheck && pnpm lint && pnpm build && pnpm test",
     "dev": "tsx src/main.ts",
     "start": "node dist/main.js",
-    "lint": "eslint . --ext .ts",
+    "lint": "pnpm exec tsc --noEmit --noUnusedLocals --noUnusedParameters -p tsconfig.json",
     "test": "vitest run src"
   },
   "devDependencies": {
