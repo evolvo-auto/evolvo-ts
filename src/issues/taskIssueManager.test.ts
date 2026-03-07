@@ -391,6 +391,70 @@ describe("TaskIssueManager", () => {
     });
   });
 
+  it("updates labels by adding and removing managed challenge labels", async () => {
+    const client = createClientMock();
+    client.get.mockResolvedValue(
+      createIssue({
+        labels: [{ name: "challenge" }, { name: "in progress" }, { name: "challenge:ready-to-retry" }],
+      }),
+    );
+    client.patch.mockResolvedValue(
+      createIssue({
+        labels: [{ name: "challenge" }, { name: "challenge:failed" }],
+      }),
+    );
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.updateLabels(1, {
+      add: ["challenge:failed"],
+      remove: ["in progress", "challenge:ready-to-retry"],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(client.patch).toHaveBeenCalledWith("/1", {
+      labels: ["challenge", "challenge:failed"],
+    });
+  });
+
+  it("returns without patch when labels are already up to date", async () => {
+    const client = createClientMock();
+    client.get.mockResolvedValue(createIssue({ labels: [{ name: "challenge" }, { name: "challenge:failed" }] }));
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.updateLabels(1, {
+      add: ["challenge:failed"],
+      remove: [],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      message: "Issue #1 labels already up to date.",
+      issue: {
+        number: 1,
+        title: "Issue",
+        description: "Description",
+        state: "open",
+        labels: ["challenge", "challenge:failed"],
+      },
+    });
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("prevents relabeling a closed issue", async () => {
+    const client = createClientMock();
+    client.get.mockResolvedValue(createIssue({ state: "closed" }));
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.updateLabels(1, {
+      add: ["challenge:failed"],
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      message: "Issue #1 is closed and cannot be relabeled.",
+    });
+  });
+
   it("returns not found if GitHub returns 404", async () => {
     const client = createClientMock();
     client.get.mockRejectedValue(new GitHubApiError("not found", 404, null));

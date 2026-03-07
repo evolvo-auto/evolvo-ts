@@ -40,6 +40,11 @@ export type ReplenishIssuesResult = {
   created: IssueSummary[];
 };
 
+export type UpdateIssueLabelsOptions = {
+  add?: string[];
+  remove?: string[];
+};
+
 type IssueTemplate = {
   title: string;
   description: string;
@@ -298,6 +303,58 @@ export class TaskIssueManager {
       ok: true,
       message: `Issue #${issueNumber} closed successfully.`,
       issue: formatIssue({ ...issue, state: "closed" }),
+    };
+  }
+
+  public async updateLabels(issueNumber: number, options: UpdateIssueLabelsOptions): Promise<IssueActionResult> {
+    const issue = await this.getIssue(issueNumber);
+
+    if (!issue) {
+      return { ok: false, message: `Issue #${issueNumber} was not found.` };
+    }
+
+    if (issue.state === "closed") {
+      return { ok: false, message: `Issue #${issueNumber} is closed and cannot be relabeled.` };
+    }
+
+    const currentLabels = issue.labels.map((label) => label.name);
+    const labelMap = new Map(currentLabels.map((label) => [label.toLowerCase(), label] as const));
+    const removeSet = new Set((options.remove ?? []).map((label) => label.trim().toLowerCase()).filter(Boolean));
+
+    for (const removeLabel of removeSet) {
+      labelMap.delete(removeLabel);
+    }
+
+    for (const addLabel of options.add ?? []) {
+      const trimmed = addLabel.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      labelMap.set(trimmed.toLowerCase(), trimmed);
+    }
+
+    const nextLabels = [...labelMap.values()];
+    const unchanged =
+      nextLabels.length === currentLabels.length &&
+      nextLabels.every((label, index) => label === currentLabels[index]);
+
+    if (unchanged) {
+      return {
+        ok: true,
+        message: `Issue #${issueNumber} labels already up to date.`,
+        issue: formatIssue(issue),
+      };
+    }
+
+    const updated = await this.client.patch<GitHubIssue>(`/${issueNumber}`, {
+      labels: nextLabels,
+    });
+
+    return {
+      ok: true,
+      message: `Issue #${issueNumber} labels updated.`,
+      issue: formatIssue(updated),
     };
   }
 

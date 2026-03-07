@@ -13,6 +13,14 @@ import {
   formatChallengeMetricsReport,
   recordChallengeAttemptMetrics,
 } from "./challenges/challengeMetrics.js";
+import {
+  CHALLENGE_BLOCKED_LABEL,
+  CHALLENGE_FAILED_LABEL,
+  CHALLENGE_READY_TO_RETRY_LABEL,
+  evaluateChallengeRetryEligibility,
+  recordChallengeAttemptOutcome,
+  type ChallengeRetryDecision,
+} from "./challenges/retryGate.js";
 import type { CodingAgentRunResult, CommandExecutionSummary } from "./agents/runCodingAgent.js";
 
 export const DEFAULT_PROMPT = "No open issues available. Create an issue first.";
@@ -20,6 +28,8 @@ const MAX_ISSUE_CYCLES = 25;
 const OUTDATED_LABELS = new Set(["outdated", "obsolete", "wontfix", "invalid", "duplicate"]);
 const MIN_REPLENISH_ISSUES = 3;
 const MAX_OPEN_ISSUES = 5;
+const CHALLENGE_MAX_ATTEMPTS = 3;
+const CHALLENGE_RETRY_COOLDOWN_MS = 60 * 60 * 1000;
 
 function hasLabel(issue: IssueSummary, label: string): boolean {
   return issue.labels.some((currentLabel) => currentLabel.toLowerCase() === label.toLowerCase());
@@ -78,6 +88,7 @@ function classifyChallengeFailure(
 }
 
 async function updateChallengeMetrics(
+  issueManager: TaskIssueManager,
   issue: IssueSummary,
   runError: unknown,
   runResult: CodingAgentRunResult | null,
@@ -95,6 +106,28 @@ async function updateChallengeMetrics(
       success,
       failureCategory,
     });
+
+    const retryState = await recordChallengeAttemptOutcome(WORK_DIR, {
+      challengeIssueNumber: issue.number,
+      success,
+    });
+    const failureAttempts = retryState.failuresByChallenge[String(issue.number)]?.attempts ?? 0;
+    const labelUpdate = success
+      ? await issueManager.updateLabels(issue.number, {
+          remove: [CHALLENGE_FAILED_LABEL, CHALLENGE_READY_TO_RETRY_LABEL, CHALLENGE_BLOCKED_LABEL],
+        })
+      : await issueManager.updateLabels(issue.number, {
+          add: failureAttempts >= CHALLENGE_MAX_ATTEMPTS
+            ? [CHALLENGE_FAILED_LABEL, CHALLENGE_BLOCKED_LABEL]
+            : [CHALLENGE_FAILED_LABEL],
+          remove: failureAttempts >= CHALLENGE_MAX_ATTEMPTS
+            ? [CHALLENGE_READY_TO_RETRY_LABEL]
+            : [CHALLENGE_READY_TO_RETRY_LABEL, CHALLENGE_BLOCKED_LABEL],
+        });
+    if (!labelUpdate.ok) {
+      console.error(`Could not update challenge retry labels for issue #${issue.number}: ${labelUpdate.message}`);
+    }
+
     console.log(formatChallengeMetricsReport(metrics));
   } catch (error) {
     if (error instanceof Error) {
@@ -104,6 +137,57 @@ async function updateChallengeMetrics(
 
     console.error(`Could not update challenge metrics for issue #${issue.number}: unknown error.`);
   }
+}
+
+function formatRetryDecisionLog(issue: IssueSummary, decision: ChallengeRetryDecision): string {
+  const corrective = decision.openCorrectiveIssueNumbers.length > 0
+    ? ` correctiveOpen=${decision.openCorrectiveIssueNumbers.join(",")}`
+    : "";
+  const cooldownSuffix = decision.cooldownRemainingMs > 0
+    ? ` cooldownRemainingMs=${decision.cooldownRemainingMs}`
+    : "";
+  return `Challenge retry decision for issue #${issue.number}: eligible=${decision.eligible} reason=${decision.reason} attempts=${decision.attemptCount}/${CHALLENGE_MAX_ATTEMPTS}${cooldownSuffix}${corrective}`;
+}
+
+async function applyChallengeRetryGate(
+  issueManager: TaskIssueManager,
+  openIssues: IssueSummary[],
+  issues: IssueSummary[],
+): Promise<IssueSummary[]> {
+  const eligible: IssueSummary[] = [];
+
+  for (const issue of issues) {
+    if (!isChallengeIssue(issue)) {
+      eligible.push(issue);
+      continue;
+    }
+
+    const decision = await evaluateChallengeRetryEligibility(WORK_DIR, issue, openIssues, {
+      maxAttempts: CHALLENGE_MAX_ATTEMPTS,
+      cooldownMs: CHALLENGE_RETRY_COOLDOWN_MS,
+    });
+    console.log(formatRetryDecisionLog(issue, decision));
+
+    let nextIssue = issue;
+    if (decision.addLabels.length > 0 || decision.removeLabels.length > 0) {
+      const labelUpdate = await issueManager.updateLabels(issue.number, {
+        add: decision.addLabels,
+        remove: decision.removeLabels,
+      });
+
+      if (!labelUpdate.ok) {
+        console.error(`Could not sync retry labels for issue #${issue.number}: ${labelUpdate.message}`);
+      } else if (labelUpdate.issue) {
+        nextIssue = labelUpdate.issue;
+      }
+    }
+
+    if (decision.eligible) {
+      eligible.push(nextIssue);
+    }
+  }
+
+  return eligible;
 }
 
 function formatDuration(durationMs: number | null): string {
@@ -320,7 +404,8 @@ export async function main(): Promise<void> {
         }
       }
 
-      const selectedIssue = selectIssueForWork(actionableIssues);
+      const retryEligibleIssues = await applyChallengeRetryGate(issueManager, actionableIssues, actionableIssues);
+      const selectedIssue = selectIssueForWork(retryEligibleIssues);
 
       if (!selectedIssue) {
         const isStartupBootstrap = cycle === 1 && openIssues.length === 0;
@@ -369,13 +454,13 @@ export async function main(): Promise<void> {
       });
 
       if (runError) {
-        await updateChallengeMetrics(selectedIssue, runError, runResult);
+        await updateChallengeMetrics(issueManager, selectedIssue, runError, runResult);
         await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueFailureComment(selectedIssue, runError));
         continue;
       }
 
       if (runResult) {
-        await updateChallengeMetrics(selectedIssue, runError, runResult);
+        await updateChallengeMetrics(issueManager, selectedIssue, runError, runResult);
         await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueExecutionComment(selectedIssue, runResult));
       }
 

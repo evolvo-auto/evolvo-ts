@@ -13,6 +13,9 @@ const generateStartupIssueTemplatesMock = vi.fn();
 const runPostMergeSelfRestartMock = vi.fn();
 const recordChallengeAttemptMetricsMock = vi.fn();
 const formatChallengeMetricsReportMock = vi.fn();
+const evaluateChallengeRetryEligibilityMock = vi.fn();
+const recordChallengeAttemptOutcomeMock = vi.fn();
+const updateLabelsMock = vi.fn();
 
 const DEFAULT_RUN_RESULT = {
   mergedPullRequest: false,
@@ -56,6 +59,14 @@ vi.mock("./challenges/challengeMetrics.js", () => ({
   formatChallengeMetricsReport: formatChallengeMetricsReportMock,
 }));
 
+vi.mock("./challenges/retryGate.js", () => ({
+  CHALLENGE_BLOCKED_LABEL: "challenge:blocked",
+  CHALLENGE_FAILED_LABEL: "challenge:failed",
+  CHALLENGE_READY_TO_RETRY_LABEL: "challenge:ready-to-retry",
+  evaluateChallengeRetryEligibility: evaluateChallengeRetryEligibilityMock,
+  recordChallengeAttemptOutcome: recordChallengeAttemptOutcomeMock,
+}));
+
 vi.mock("./issues/runIssueCommand.js", () => ({
   runIssueCommand: runIssueCommandMock,
 }));
@@ -82,6 +93,7 @@ vi.mock("./issues/taskIssueManager.js", () => ({
     addProgressComment = addProgressCommentMock;
     closeIssue = closeIssueMock;
     replenishSelfImprovementIssues = replenishSelfImprovementIssuesMock;
+    updateLabels = updateLabelsMock;
   },
 }));
 
@@ -126,6 +138,20 @@ describe("main", () => {
     });
     formatChallengeMetricsReportMock.mockReset();
     formatChallengeMetricsReportMock.mockReturnValue("## Challenge Metrics");
+    evaluateChallengeRetryEligibilityMock.mockReset();
+    evaluateChallengeRetryEligibilityMock.mockResolvedValue({
+      eligible: true,
+      reason: "not-challenge",
+      attemptCount: 0,
+      cooldownRemainingMs: 0,
+      openCorrectiveIssueNumbers: [],
+      addLabels: [],
+      removeLabels: [],
+    });
+    recordChallengeAttemptOutcomeMock.mockReset();
+    recordChallengeAttemptOutcomeMock.mockResolvedValue({ failuresByChallenge: {} });
+    updateLabelsMock.mockReset();
+    updateLabelsMock.mockResolvedValue({ ok: true, message: "labels updated" });
     process.argv = ["node", "src/main.ts"];
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -442,6 +468,13 @@ describe("main", () => {
       success: true,
       failureCategory: undefined,
     });
+    expect(recordChallengeAttemptOutcomeMock).toHaveBeenCalledWith("/tmp/evolvo", {
+      challengeIssueNumber: 88,
+      success: true,
+    });
+    expect(updateLabelsMock).toHaveBeenCalledWith(88, {
+      remove: ["challenge:failed", "challenge:ready-to-retry", "challenge:blocked"],
+    });
     expect(formatChallengeMetricsReportMock).toHaveBeenCalled();
   });
 
@@ -461,5 +494,68 @@ describe("main", () => {
       success: false,
       failureCategory: "execution_error",
     });
+    expect(updateLabelsMock).toHaveBeenCalledWith(89, {
+      add: ["challenge:failed"],
+      remove: ["challenge:ready-to-retry", "challenge:blocked"],
+    });
+  });
+
+  it("skips challenge retries when retry gate is not eligible", async () => {
+    listOpenIssuesMock.mockResolvedValue([
+      { number: 90, title: "Retry gated", description: "gated", state: "open", labels: ["challenge", "challenge:failed"] },
+    ]);
+    evaluateChallengeRetryEligibilityMock.mockResolvedValue({
+      eligible: false,
+      reason: "cooldown-active",
+      attemptCount: 1,
+      cooldownRemainingMs: 1000,
+      openCorrectiveIssueNumbers: [],
+      addLabels: [],
+      removeLabels: [],
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(runCodingAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("allows challenge retry when retry gate is eligible", async () => {
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        {
+          number: 91,
+          title: "Retry allowed",
+          description: "allowed",
+          state: "open",
+          labels: ["challenge", "challenge:failed"],
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    evaluateChallengeRetryEligibilityMock.mockResolvedValueOnce({
+      eligible: true,
+      reason: "ready-to-retry",
+      attemptCount: 1,
+      cooldownRemainingMs: 0,
+      openCorrectiveIssueNumbers: [],
+      addLabels: ["challenge:ready-to-retry"],
+      removeLabels: [],
+    });
+    updateLabelsMock.mockResolvedValueOnce({
+      ok: true,
+      message: "updated",
+      issue: {
+        number: 91,
+        title: "Retry allowed",
+        description: "allowed",
+        state: "open",
+        labels: ["challenge", "challenge:failed", "challenge:ready-to-retry"],
+      },
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #91: Retry allowed\n\nallowed");
   });
 });
