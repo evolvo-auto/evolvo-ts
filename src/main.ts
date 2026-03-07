@@ -42,6 +42,7 @@ import {
   type LifecycleDerivedState,
   type LifecycleEntityKind,
 } from "./runtime/lifecycleState.js";
+import { writeRuntimeReadinessSignal } from "./runtime/runtimeReadiness.js";
 
 export const DEFAULT_PROMPT = "No open issues available. Create an issue first.";
 const MAX_ISSUE_CYCLES = 100;
@@ -751,6 +752,21 @@ async function waitForRunLoopRetry(delayMs: number): Promise<void> {
   });
 }
 
+async function signalRestartReadinessIfRequested(workDir: string): Promise<void> {
+  const token = process.env.EVOLVO_RESTART_TOKEN?.trim();
+  if (!token) {
+    return;
+  }
+
+  const signalPathOverride = process.env.EVOLVO_READINESS_FILE?.trim();
+  const signalPath = await writeRuntimeReadinessSignal({
+    workDir,
+    token,
+    signalPath: signalPathOverride || undefined,
+  });
+  console.log(`[startup] Runtime readiness signal written: ${signalPath}`);
+}
+
 export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const issueCommandHandled = await runIssueCommand(args);
@@ -763,6 +779,7 @@ export async function main(): Promise<void> {
 
   console.log(`Hello from ${GITHUB_OWNER}/${GITHUB_REPO}!`);
   console.log(`Working directory: ${WORK_DIR}`);
+  await signalRestartReadinessIfRequested(WORK_DIR);
 
   issueCycleLoop: for (let cycle = 1; cycle <= MAX_ISSUE_CYCLES; cycle += 1) {
     let retryAttempt = 0;

@@ -12,6 +12,7 @@ const recordChallengeAttemptOutcomeMock = vi.fn();
 const persistChallengeAttemptArtifactMock = vi.fn();
 const transitionCanonicalLifecycleStateMock = vi.fn();
 const buildLifecycleStateCommentMock = vi.fn();
+const writeRuntimeReadinessSignalMock = vi.fn();
 
 type MockIssue = {
   number: number;
@@ -129,6 +130,10 @@ vi.mock("./challenges/challengeAttemptArtifacts.js", () => ({
 vi.mock("./runtime/lifecycleState.js", () => ({
   transitionCanonicalLifecycleState: transitionCanonicalLifecycleStateMock,
   buildLifecycleStateComment: buildLifecycleStateCommentMock,
+}));
+
+vi.mock("./runtime/runtimeReadiness.js", () => ({
+  writeRuntimeReadinessSignal: writeRuntimeReadinessSignalMock,
 }));
 
 vi.mock("./github/githubConfig.js", () => ({
@@ -296,6 +301,8 @@ describe("main replenishment integration", () => {
     });
     buildLifecycleStateCommentMock.mockReset();
     buildLifecycleStateCommentMock.mockReturnValue("## Canonical Lifecycle State");
+    writeRuntimeReadinessSignalMock.mockReset();
+    writeRuntimeReadinessSignalMock.mockResolvedValue("/tmp/evolvo/.evolvo/runtime-readiness.json");
     process.argv = ["node", "test-runner.ts"];
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});

@@ -21,6 +21,7 @@ const updateLabelsMock = vi.fn();
 const createIssueMock = vi.fn();
 const transitionCanonicalLifecycleStateMock = vi.fn();
 const buildLifecycleStateCommentMock = vi.fn();
+const writeRuntimeReadinessSignalMock = vi.fn();
 
 const DEFAULT_RUN_RESULT = {
   mergedPullRequest: false,
@@ -81,6 +82,10 @@ vi.mock("./runtime/lifecycleState.js", () => ({
   buildLifecycleStateComment: buildLifecycleStateCommentMock,
 }));
 
+vi.mock("./runtime/runtimeReadiness.js", () => ({
+  writeRuntimeReadinessSignal: writeRuntimeReadinessSignalMock,
+}));
+
 vi.mock("./issues/runIssueCommand.js", () => ({
   runIssueCommand: runIssueCommandMock,
 }));
@@ -118,6 +123,8 @@ describe("main", () => {
 
   beforeEach(() => {
     vi.resetModules();
+    delete process.env.EVOLVO_RESTART_TOKEN;
+    delete process.env.EVOLVO_READINESS_FILE;
     runCodingAgentMock.mockReset();
     runCodingAgentMock.mockResolvedValue(DEFAULT_RUN_RESULT);
     runPostMergeSelfRestartMock.mockReset();
@@ -206,6 +213,8 @@ describe("main", () => {
     });
     buildLifecycleStateCommentMock.mockReset();
     buildLifecycleStateCommentMock.mockReturnValue("## Canonical Lifecycle State");
+    writeRuntimeReadinessSignalMock.mockReset();
+    writeRuntimeReadinessSignalMock.mockResolvedValue("/tmp/evolvo/.evolvo/runtime-readiness.json");
     process.argv = ["node", "test-runner.ts"];
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -226,6 +235,22 @@ describe("main", () => {
     expect(runIssueCommandMock).toHaveBeenCalledWith(["issues", "list"]);
     expect(runCodingAgentMock).not.toHaveBeenCalled();
     expect(listOpenIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it("writes startup readiness signal when restart token is present", async () => {
+    process.env.EVOLVO_RESTART_TOKEN = "restart-token";
+    process.env.EVOLVO_READINESS_FILE = "/tmp/evolvo/.evolvo/runtime-readiness.json";
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(writeRuntimeReadinessSignalMock).toHaveBeenCalledWith({
+      workDir: "/tmp/evolvo",
+      token: "restart-token",
+      signalPath: "/tmp/evolvo/.evolvo/runtime-readiness.json",
+    });
+    delete process.env.EVOLVO_RESTART_TOKEN;
+    delete process.env.EVOLVO_READINESS_FILE;
   });
 
   it("selects an open issue and uses it as the prompt", async () => {
