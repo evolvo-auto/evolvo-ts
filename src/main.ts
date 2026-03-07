@@ -8,6 +8,7 @@ import { runIssueCommand } from "./issues/runIssueCommand.js";
 import { getGitHubConfig } from "./github/githubConfig.js";
 import { GitHubApiError, GitHubClient } from "./github/githubClient.js";
 import { TaskIssueManager, type IssueSummary } from "./issues/taskIssueManager.js";
+import { generateStartupIssueTemplates } from "./issues/startupIssueBootstrap.js";
 
 export const DEFAULT_PROMPT = "No open issues available. Create an issue first.";
 const MAX_ISSUE_CYCLES = 25;
@@ -47,6 +48,17 @@ function formatIssueForLog(issue: IssueSummary): string {
 function logCreatedIssues(issues: IssueSummary[]): void {
   const issueList = issues.map((issue) => formatIssueForLog(issue)).join(", ");
   console.log(`Created ${issues.length} self-improvement issue(s): ${issueList}.`);
+}
+
+async function bootstrapStartupIssues(issueManager: TaskIssueManager): Promise<IssueSummary[]> {
+  const templates = await generateStartupIssueTemplates(WORK_DIR, { targetCount: MIN_REPLENISH_ISSUES });
+  const replenishment = await issueManager.replenishSelfImprovementIssues({
+    minimumIssueCount: MIN_REPLENISH_ISSUES,
+    maximumOpenIssues: MAX_OPEN_ISSUES,
+    templates,
+  });
+
+  return replenishment.created;
 }
 
 function logGitHubFallback(error: unknown): void {
@@ -100,13 +112,21 @@ export async function main(): Promise<void> {
       const selectedIssue = selectIssueForWork(actionableIssues);
 
       if (!selectedIssue) {
-        const replenishment = await issueManager.replenishSelfImprovementIssues({
-          minimumIssueCount: MIN_REPLENISH_ISSUES,
-          maximumOpenIssues: MAX_OPEN_ISSUES,
-        });
+        const isStartupBootstrap = cycle === 1 && openIssues.length === 0;
+        const createdIssues = isStartupBootstrap
+          ? await bootstrapStartupIssues(issueManager)
+          : (
+              await issueManager.replenishSelfImprovementIssues({
+                minimumIssueCount: MIN_REPLENISH_ISSUES,
+                maximumOpenIssues: MAX_OPEN_ISSUES,
+              })
+            ).created;
 
-        if (replenishment.created.length > 0) {
-          logCreatedIssues(replenishment.created);
+        if (createdIssues.length > 0) {
+          if (isStartupBootstrap) {
+            console.log("No open issues found on startup. Bootstrapped issue queue from repository analysis.");
+          }
+          logCreatedIssues(createdIssues);
           continue;
         }
 
