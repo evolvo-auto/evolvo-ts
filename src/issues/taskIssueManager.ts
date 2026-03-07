@@ -379,6 +379,10 @@ export class TaskIssueManager {
     if (remainingOpenSlots <= 0) {
       return { created: [] };
     }
+    const queueDeficit = Math.max(0, minimumIssueCount - openIssues.length);
+    if (queueDeficit <= 0) {
+      return { created: [] };
+    }
 
     const recentClosed = await this.listRecentClosedIssues(PLANNED_ISSUE_RECENT_CLOSED_LOOKBACK_LIMIT);
     const existingTitles = new Set(
@@ -388,7 +392,7 @@ export class TaskIssueManager {
     );
 
     const created: IssueSummary[] = [];
-    const toCreateCount = Math.min(remainingOpenSlots, minimumIssueCount);
+    const toCreateCount = Math.min(remainingOpenSlots, queueDeficit);
 
     for (const plannedIssue of plannedIssues) {
       if (created.length >= toCreateCount) {

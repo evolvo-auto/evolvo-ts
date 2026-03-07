@@ -268,6 +268,32 @@ describe("TaskIssueManager", () => {
     );
   });
 
+  it("creates planned issues only up to the queue deficit when blocked open issues already exist", async () => {
+    const client = createClientMock();
+    client.get
+      .mockResolvedValueOnce([
+        createIssue({ number: 1, title: "Blocked issue", labels: [{ name: "blocked" }] }),
+        createIssue({ number: 2, title: "Another open issue", labels: [{ name: "in progress" }] }),
+      ])
+      .mockResolvedValueOnce([]);
+    client.post.mockResolvedValueOnce(createIssue({ number: 31, title: "Candidate A" }));
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.createPlannedIssues({
+      minimumIssueCount: 3,
+      maximumOpenIssues: 5,
+      issues: [
+        { title: "Candidate A", description: "Should fill the single missing queue slot." },
+        { title: "Candidate B", description: "Should not be created once the deficit is filled." },
+      ],
+    });
+
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0]?.title).toBe("Candidate A");
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(client.post).toHaveBeenCalledWith("", expect.objectContaining({ title: "Candidate A" }));
+  });
+
   it("replenishes empty queue with provided repository-derived candidates", async () => {
     const client = createClientMock();
     client.get
