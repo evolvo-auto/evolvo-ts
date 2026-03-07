@@ -531,6 +531,45 @@ describe("main", () => {
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(2, "Issue #32: Replenished\n\nsecond");
   });
 
+  it("replenishes an empty queue mid-run and keeps processing without hitting exit paths", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 41, title: "First", description: "one", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { number: 42, title: "Second", description: "two", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    replenishSelfImprovementIssuesMock.mockResolvedValueOnce({
+      created: [{ number: 42, title: "Second", description: "two", state: "open", labels: [] }],
+    });
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledTimes(2);
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenNthCalledWith(1, {
+      minimumIssueCount: 3,
+      maximumOpenIssues: 5,
+    });
+    expect(markInProgressMock).toHaveBeenNthCalledWith(1, 41);
+    expect(markInProgressMock).toHaveBeenNthCalledWith(2, 42);
+    expect(runCodingAgentMock).toHaveBeenNthCalledWith(1, "Issue #41: First\n\none");
+    expect(runCodingAgentMock).toHaveBeenNthCalledWith(2, "Issue #42: Second\n\ntwo");
+    expect(console.log).toHaveBeenCalledWith("Cycle 2 queue health: open=0 selected=none queueAction=replenish:1");
+    expect(console.log).not.toHaveBeenCalledWith(DEFAULT_PROMPT);
+    const cycleThreeLogIndex = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.findIndex(
+      (call) => call[0] === "Cycle 3 queue health: open=1 selected=#42",
+    );
+    const stopLogIndex = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.findIndex(
+      (call) => call[0] === "No actionable open issues remaining and no new issues were created. Issue loop stopped.",
+    );
+    expect(cycleThreeLogIndex).toBeGreaterThan(-1);
+    expect(stopLogIndex).toBeGreaterThan(cycleThreeLogIndex);
+  });
+
   it("falls back cleanly when GitHub credentials are invalid", async () => {
     listOpenIssuesMock.mockRejectedValue(
       new GitHubApiError("GitHub API request failed (401): Bad credentials", 401, null),
