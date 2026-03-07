@@ -333,6 +333,30 @@ describe("main replenishment integration", () => {
     expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
   });
 
+  it("continues processing when mid-run replenishment analysis fails and fallback templates are used", async () => {
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+    generateStartupIssueTemplatesMock.mockRejectedValueOnce(new Error("analysis unavailable mid-run"));
+
+    await main();
+
+    expect(generateStartupIssueTemplatesMock).toHaveBeenCalledWith("/tmp/evolvo", { targetCount: 3 });
+    expect(console.error).toHaveBeenCalledWith(
+      "Queue analysis for replenishment templates failed: analysis unavailable mid-run",
+    );
+    expect(mockApiState.createdIssueTitles).toHaveLength(3);
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 2 queue health: open=0 selected=none queueAction=replenish created=3 outcome=continue",
+    );
+    expect(runCodingAgentMock).toHaveBeenCalledTimes(2);
+    const secondPrompt = runCodingAgentMock.mock.calls[1]?.[0];
+    expect(secondPrompt).toContain(`Issue #11: ${mockApiState.createdIssueTitles[0]}`);
+    expect(console.log).not.toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(console.log).not.toHaveBeenCalledWith(
+      "No actionable open issues remaining and no new issues were created. Issue loop stopped.",
+    );
+    expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
+  });
+
   it("replenishes a drained queue with follow-up issue titles and keeps processing", async () => {
     resetMockApiState();
     mockApiState.issues.unshift(
