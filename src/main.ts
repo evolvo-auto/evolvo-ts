@@ -27,6 +27,7 @@ import {
   classifyChallengeFailure,
   createCorrectiveIssuesForChallengeFailure,
 } from "./challenges/challengeFailureLearning.js";
+import { persistChallengeAttemptArtifact } from "./challenges/challengeAttemptArtifacts.js";
 import type { CodingAgentRunResult, CommandExecutionSummary } from "./agents/runCodingAgent.js";
 
 export const DEFAULT_PROMPT = "No open issues available. Create an issue first.";
@@ -273,7 +274,79 @@ function buildIssueStartComment(issue: IssueSummary): string {
   ].join("\n");
 }
 
-function buildIssueExecutionComment(issue: IssueSummary, result: CodingAgentRunResult): string {
+type ChallengeAttemptEvidence = {
+  artifactPath: string;
+  attempt: number;
+  outcome: "success" | "failure";
+  reviewOutcome: string | null;
+  runtimeErrorMessage: string | null;
+};
+
+function buildChallengeEvidenceCommentLines(evidence: ChallengeAttemptEvidence | null): string[] {
+  if (!evidence) {
+    return [
+      "",
+      "### Challenge Attempt Artifact",
+      "- Artifact path: (capture failed)",
+      "- Attempt: unknown",
+    ];
+  }
+
+  return [
+    "",
+    "### Challenge Attempt Artifact",
+    `- Artifact path: \`${evidence.artifactPath}\``,
+    `- Attempt: ${evidence.attempt}`,
+    `- Outcome: ${evidence.outcome}`,
+    `- Review outcome: ${evidence.reviewOutcome ?? "unknown"}`,
+    `- Runtime error message: ${evidence.runtimeErrorMessage ?? "none"}`,
+  ];
+}
+
+async function persistChallengeAttemptEvidence(
+  issue: IssueSummary,
+  runError: unknown,
+  runResult: CodingAgentRunResult | null,
+): Promise<ChallengeAttemptEvidence | null> {
+  if (!isChallengeIssue(issue)) {
+    return null;
+  }
+
+  try {
+    const persisted = await persistChallengeAttemptArtifact(WORK_DIR, {
+      challengeIssueNumber: issue.number,
+      runResult,
+      runError,
+    });
+    const reviewOutcome = persisted.artifact.executionSummary &&
+      typeof persisted.artifact.executionSummary.reviewOutcome === "string"
+      ? persisted.artifact.executionSummary.reviewOutcome
+      : null;
+    const outcome = persisted.artifact.outcome === "success" ? "success" : "failure";
+    const attempt = Number.isFinite(persisted.artifact.attempt) ? Math.max(1, Math.floor(persisted.artifact.attempt)) : 1;
+    return {
+      artifactPath: persisted.relativePath,
+      attempt,
+      outcome,
+      reviewOutcome,
+      runtimeErrorMessage: persisted.artifact.runtimeError?.message ?? null,
+    };
+  } catch (error) {
+    if (error instanceof Error) {
+      console.error(`Could not persist challenge attempt artifact for issue #${issue.number}: ${error.message}`);
+      return null;
+    }
+
+    console.error(`Could not persist challenge attempt artifact for issue #${issue.number}: unknown error.`);
+    return null;
+  }
+}
+
+function buildIssueExecutionComment(
+  issue: IssueSummary,
+  result: CodingAgentRunResult,
+  challengeEvidence: ChallengeAttemptEvidence | null,
+): string {
   const inspectedAreas = result.summary.inspectedAreas.length > 0
     ? result.summary.inspectedAreas.map((area) => `- \`${area}\``)
     : ["- No explicit file/area inspection commands were captured."];
@@ -294,6 +367,7 @@ function buildIssueExecutionComment(issue: IssueSummary, result: CodingAgentRunR
     ? result.summary.externalPullRequests.map((url) => `- ${url}`)
     : ["- No external pull request link captured."];
   const externalMergeLine = `- External pull request merged: ${result.summary.mergedExternalPullRequest ? "yes" : "no"}.`;
+  const challengeEvidenceLines = isChallengeIssue(issue) ? buildChallengeEvidenceCommentLines(challengeEvidence) : [];
 
   return [
     "## Task Execution Log",
@@ -320,6 +394,7 @@ function buildIssueExecutionComment(issue: IssueSummary, result: CodingAgentRunR
     "#### External Pull Request",
     ...externalPullRequestLines,
     externalMergeLine,
+    ...challengeEvidenceLines,
     "",
     "### Completion Summary",
     `- Issue #${issue.number} execution cycle finished with outcome: ${result.summary.reviewOutcome}.`,
@@ -327,12 +402,18 @@ function buildIssueExecutionComment(issue: IssueSummary, result: CodingAgentRunR
   ].join("\n");
 }
 
-function buildIssueFailureComment(issue: IssueSummary, error: unknown): string {
+function buildIssueFailureComment(
+  issue: IssueSummary,
+  error: unknown,
+  challengeEvidence: ChallengeAttemptEvidence | null,
+): string {
   const message = error instanceof Error ? error.message : "Unknown runtime error.";
+  const challengeEvidenceLines = isChallengeIssue(issue) ? buildChallengeEvidenceCommentLines(challengeEvidence) : [];
   return [
     "## Task Execution Problem",
     `- Issue #${issue.number} hit an execution error: ${message}`,
     "- Action: run interrupted; follow-up retry/amendment is required.",
+    ...challengeEvidenceLines,
   ].join("\n");
 }
 
@@ -493,14 +574,24 @@ export async function main(): Promise<void> {
       });
 
       if (runError) {
+        const challengeEvidence = await persistChallengeAttemptEvidence(selectedIssue, runError, runResult);
         await updateChallengeMetrics(issueManager, selectedIssue, runError, runResult);
-        await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueFailureComment(selectedIssue, runError));
+        await addIssueLifecycleComment(
+          issueManager,
+          selectedIssue.number,
+          buildIssueFailureComment(selectedIssue, runError, challengeEvidence),
+        );
         continue;
       }
 
       if (runResult) {
+        const challengeEvidence = await persistChallengeAttemptEvidence(selectedIssue, runError, runResult);
         await updateChallengeMetrics(issueManager, selectedIssue, runError, runResult);
-        await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueExecutionComment(selectedIssue, runResult));
+        await addIssueLifecycleComment(
+          issueManager,
+          selectedIssue.number,
+          buildIssueExecutionComment(selectedIssue, runResult, challengeEvidence),
+        );
       }
 
       if (runResult?.mergedPullRequest) {

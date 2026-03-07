@@ -15,6 +15,7 @@ const recordChallengeAttemptMetricsMock = vi.fn();
 const formatChallengeMetricsReportMock = vi.fn();
 const evaluateChallengeRetryEligibilityMock = vi.fn();
 const recordChallengeAttemptOutcomeMock = vi.fn();
+const persistChallengeAttemptArtifactMock = vi.fn();
 const updateLabelsMock = vi.fn();
 const createIssueMock = vi.fn();
 
@@ -66,6 +67,10 @@ vi.mock("./challenges/retryGate.js", () => ({
   CHALLENGE_READY_TO_RETRY_LABEL: "challenge:ready-to-retry",
   evaluateChallengeRetryEligibility: evaluateChallengeRetryEligibilityMock,
   recordChallengeAttemptOutcome: recordChallengeAttemptOutcomeMock,
+}));
+
+vi.mock("./challenges/challengeAttemptArtifacts.js", () => ({
+  persistChallengeAttemptArtifact: persistChallengeAttemptArtifactMock,
 }));
 
 vi.mock("./issues/runIssueCommand.js", () => ({
@@ -152,6 +157,19 @@ describe("main", () => {
     });
     recordChallengeAttemptOutcomeMock.mockReset();
     recordChallengeAttemptOutcomeMock.mockResolvedValue({ failuresByChallenge: {} });
+    persistChallengeAttemptArtifactMock.mockReset();
+    persistChallengeAttemptArtifactMock.mockResolvedValue({
+      relativePath: ".evolvo/challenge-attempts/88/0001.json",
+      absolutePath: "/tmp/evolvo/.evolvo/challenge-attempts/88/0001.json",
+      artifact: {
+        attempt: 1,
+        outcome: "success",
+        executionSummary: {
+          reviewOutcome: "accepted",
+        },
+        runtimeError: null,
+      },
+    });
     updateLabelsMock.mockReset();
     updateLabelsMock.mockResolvedValue({ ok: true, message: "labels updated" });
     createIssueMock.mockReset();
@@ -198,6 +216,7 @@ describe("main", () => {
     expect(addProgressCommentMock).toHaveBeenCalledWith(12, expect.stringContaining("## Task Execution Log"));
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #12: Fix login redirect\n\nHandle callback URL.");
     expect(recordChallengeAttemptMetricsMock).not.toHaveBeenCalled();
+    expect(persistChallengeAttemptArtifactMock).not.toHaveBeenCalled();
     expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith(
       expect.objectContaining({ minimumIssueCount: 3, maximumOpenIssues: 5 }),
     );
@@ -455,6 +474,7 @@ describe("main", () => {
   });
 
   it("records challenge metrics for accepted challenge attempts", async () => {
+    process.argv = ["node", "test-runner.ts"];
     listOpenIssuesMock
       .mockResolvedValueOnce([
         { number: 88, title: "Challenge pass", description: "solve", state: "open", labels: ["challenge"] },
@@ -471,6 +491,13 @@ describe("main", () => {
 
     await main();
 
+    expect(persistChallengeAttemptArtifactMock).toHaveBeenCalledWith("/tmp/evolvo", {
+      challengeIssueNumber: 88,
+      runResult: expect.objectContaining({
+        summary: expect.objectContaining({ reviewOutcome: "accepted" }),
+      }),
+      runError: null,
+    });
     expect(recordChallengeAttemptMetricsMock).toHaveBeenCalledWith("/tmp/evolvo", {
       challengeIssueNumber: 88,
       success: true,
@@ -484,19 +511,44 @@ describe("main", () => {
       remove: ["challenge:failed", "challenge:ready-to-retry", "challenge:blocked", "learning-generated"],
     });
     expect(formatChallengeMetricsReportMock).toHaveBeenCalled();
+    expect(addProgressCommentMock).toHaveBeenCalledWith(88, expect.stringContaining("### Challenge Attempt Artifact"));
+    expect(addProgressCommentMock).toHaveBeenCalledWith(
+      88,
+      expect.stringContaining("`.evolvo/challenge-attempts/88/0001.json`"),
+    );
   });
 
   it("records challenge metrics for challenge runtime failures", async () => {
+    process.argv = ["node", "test-runner.ts"];
     listOpenIssuesMock
       .mockResolvedValueOnce([
         { number: 89, title: "Challenge fail", description: "break", state: "open", labels: ["challenge"] },
       ])
       .mockResolvedValueOnce([]);
     runCodingAgentMock.mockRejectedValueOnce(new Error("run blew up"));
+    persistChallengeAttemptArtifactMock.mockResolvedValueOnce({
+      relativePath: ".evolvo/challenge-attempts/89/0002.json",
+      absolutePath: "/tmp/evolvo/.evolvo/challenge-attempts/89/0002.json",
+      artifact: {
+        attempt: 2,
+        outcome: "failure",
+        executionSummary: {
+          reviewOutcome: null,
+        },
+        runtimeError: {
+          message: "run blew up",
+        },
+      },
+    });
     const { main } = await import("./main.js");
 
     await main();
 
+    expect(persistChallengeAttemptArtifactMock).toHaveBeenCalledWith("/tmp/evolvo", {
+      challengeIssueNumber: 89,
+      runResult: null,
+      runError: expect.any(Error),
+    });
     expect(recordChallengeAttemptMetricsMock).toHaveBeenCalledWith("/tmp/evolvo", {
       challengeIssueNumber: 89,
       success: false,
@@ -513,6 +565,11 @@ describe("main", () => {
     );
     expect(addProgressCommentMock).toHaveBeenCalledWith(89, expect.stringContaining("## Challenge Failure Learning"));
     expect(addProgressCommentMock).toHaveBeenCalledWith(89, expect.stringContaining("Failure classification: `execution_failure`"));
+    expect(addProgressCommentMock).toHaveBeenCalledWith(89, expect.stringContaining("### Challenge Attempt Artifact"));
+    expect(addProgressCommentMock).toHaveBeenCalledWith(
+      89,
+      expect.stringContaining("`.evolvo/challenge-attempts/89/0002.json`"),
+    );
     expect(updateLabelsMock).toHaveBeenCalledWith(89, {
       add: ["learning-generated"],
     });
