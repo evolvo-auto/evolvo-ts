@@ -249,7 +249,11 @@ export function isTransientGitHubError(error: unknown): boolean {
 }
 
 export function getRunLoopRetryDelayMs(retryAttempt: number): number {
-  const exponentialDelay = RUN_LOOP_GITHUB_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, retryAttempt - 1));
+  const normalizedAttempt =
+    Number.isFinite(retryAttempt) && retryAttempt > 0
+      ? Math.floor(retryAttempt)
+      : 1;
+  const exponentialDelay = RUN_LOOP_GITHUB_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, normalizedAttempt - 1));
   return Math.min(exponentialDelay, RUN_LOOP_GITHUB_RETRY_MAX_DELAY_MS);
 }
 

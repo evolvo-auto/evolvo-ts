@@ -17,6 +17,13 @@ describe("loopUtils retry handling", () => {
     expect(getRunLoopRetryDelayMs(9)).toBe(1000);
   });
 
+  it("falls back to base delay when retry attempt input is invalid", () => {
+    expect(getRunLoopRetryDelayMs(0)).toBe(50);
+    expect(getRunLoopRetryDelayMs(-3)).toBe(50);
+    expect(getRunLoopRetryDelayMs(Number.NaN)).toBe(50);
+    expect(getRunLoopRetryDelayMs(Number.POSITIVE_INFINITY)).toBe(50);
+  });
+
   it("classifies transient GitHub API status errors correctly", () => {
     expect(isTransientGitHubError(new GitHubApiError("rate", 429, null))).toBe(true);
     expect(isTransientGitHubError(new GitHubApiError("server", 500, null))).toBe(true);
