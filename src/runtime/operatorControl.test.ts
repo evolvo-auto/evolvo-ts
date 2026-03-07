@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as gracefulShutdown from "./gracefulShutdown.js";
 import {
   getDiscordControlConfigFromEnv,
   notifyIssueStartedInDiscord,
@@ -435,6 +436,60 @@ describe("operatorControl", () => {
         }),
       }),
     );
+  });
+
+  it("does not advance the Discord control cursor past a command that fails before processing completes", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const recordRequestSpy = vi.spyOn(gracefulShutdown, "recordGracefulShutdownRequest")
+      .mockRejectedValueOnce(new Error("simulated cursor-ordering failure"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: "7400", content: "boot", author: { id: "someone" } }]), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ id: "7401", content: "/quit", author: { id: "operator-1" } }]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ id: "7401", content: "/quit", author: { id: "operator-1" } }]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-replayed" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const firstRequest = await pollDiscordGracefulShutdownCommand(workDir);
+
+    expect(firstRequest).toBeNull();
+    expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("7400");
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Discord graceful shutdown polling failed: [read-control-commands] simulated cursor-ordering failure"),
+    );
+
+    recordRequestSpy.mockRestore();
+
+    const replayedRequest = await pollDiscordGracefulShutdownCommand(workDir);
+
+    expect(replayedRequest).toEqual({
+      version: 1,
+      source: "discord",
+      command: "/quit",
+      mode: "after-current-task",
+      messageId: "7401",
+      requestedAt: expect.any(String),
+    });
+    expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("7401");
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
   });
 
   it("queues an authorized /startProject request and acknowledges the created tracker issue", async () => {
