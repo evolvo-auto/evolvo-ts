@@ -135,9 +135,14 @@ Post-merge workflow runs:
 2. `git pull --ff-only`
 3. `pnpm i`
 4. `pnpm build`
-5. detached `pnpm start`
+5. `pnpm start` (with readiness-token handshake)
 
-If any step fails, runtime logs the failing command and exits current cycle. Fix the reported failure, then restart manually with `pnpm dev`.
+Restart success requires an explicit readiness signal:
+
+- restarted runtime writes `.evolvo/runtime-readiness.json` with the restart token from `EVOLVO_RESTART_TOKEN`
+- parent process waits for matching token readiness before declaring restart success
+
+If any step fails, or readiness is not observed in time, runtime logs diagnostics and exits current cycle. Fix the reported failure, then restart manually with `pnpm dev`.
 
 ## Manual Issue Commands
 
