@@ -298,11 +298,15 @@ describe("main", () => {
 
     expect(addProgressCommentMock).toHaveBeenCalledWith(
       13,
-      expect.stringContaining("`pnpm validate` (name=pnpm, status=1, elapsed=321ms"),
+      expect.stringContaining("`pnpm validate` (name=pnpm, command_name=pnpm, status=1, elapsed=321ms"),
     );
     expect(addProgressCommentMock).toHaveBeenCalledWith(
       13,
       expect.stringContaining("exit_code=1"),
+    );
+    expect(addProgressCommentMock).toHaveBeenCalledWith(
+      13,
+      expect.stringContaining("command_name=pnpm"),
     );
     expect(addProgressCommentMock).toHaveBeenCalledWith(
       13,
@@ -334,7 +338,7 @@ describe("main", () => {
 
     expect(addProgressCommentMock).toHaveBeenCalledWith(
       18,
-      expect.stringContaining("`CI=1 pnpm test` (name=pnpm, status=0, elapsed=155ms"),
+      expect.stringContaining("`CI=1 pnpm test` (name=pnpm, command_name=pnpm, status=0, elapsed=155ms"),
     );
   });
 
@@ -359,7 +363,7 @@ describe("main", () => {
 
     expect(addProgressCommentMock).toHaveBeenCalledWith(
       20,
-      expect.stringContaining("`pnpm test` (name=pnpm, status=unknown, elapsed=unknown, exit_code=unknown, duration_ms=unknown, outcome=unknown)"),
+      expect.stringContaining("`pnpm test` (name=pnpm, command_name=pnpm, status=unknown, elapsed=unknown, exit_code=unknown, duration_ms=unknown, outcome=unknown)"),
     );
   });
 

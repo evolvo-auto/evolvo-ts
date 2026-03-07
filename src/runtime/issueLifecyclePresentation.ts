@@ -54,7 +54,7 @@ function formatValidationCommand(command: CommandExecutionSummary): string {
   const duration = formatDuration(command.durationMs);
   const durationMsValue = formatDurationMsValue(command.durationMs);
   const outcome = command.exitCode === null ? "unknown" : command.exitCode === 0 ? "passed" : "failed";
-  return `- \`${command.command}\` (name=${commandName}, status=${exitCode}, elapsed=${duration}, exit_code=${exitCode}, duration_ms=${durationMsValue}, outcome=${outcome})`;
+  return `- \`${command.command}\` (name=${commandName}, command_name=${commandName}, status=${exitCode}, elapsed=${duration}, exit_code=${exitCode}, duration_ms=${durationMsValue}, outcome=${outcome})`;
 }
 
 function summarizeRetryNotes(result: CodingAgentRunResult): string {
