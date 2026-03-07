@@ -1,5 +1,10 @@
 import { Codex, type ThreadOptions } from "@openai/codex-sdk";
-import type { IssueSummary, PlannedIssueDraft, TaskIssueManager } from "../issues/taskIssueManager.js";
+import {
+  normalizePlannedIssueComparisonTitle,
+  type IssueSummary,
+  type PlannedIssueDraft,
+  type TaskIssueManager,
+} from "../issues/taskIssueManager.js";
 
 export type PlannerAgentInput = {
   cycle: number;
@@ -48,22 +53,12 @@ type PlannerResponse = {
   issues: unknown[];
 };
 
-function normalizeTitle(title: string): string {
-  return title.trim().toLowerCase();
-}
-
-function normalizeClosedIssueTitle(title: string): string {
-  return normalizeTitle(title)
-    .replace(/\s*\(follow-up\s+\d+\)\s*$/i, "")
-    .replace(/\s+/g, " ");
-}
-
 function dedupeClosedIssueHistory(issues: IssueSummary[]): IssueSummary[] {
   const seen = new Set<string>();
   const unique: IssueSummary[] = [];
 
   for (const issue of issues) {
-    const key = normalizeClosedIssueTitle(issue.title);
+    const key = normalizePlannedIssueComparisonTitle(issue.title);
     if (seen.has(key)) {
       continue;
     }
@@ -102,7 +97,7 @@ function dedupePlannedIssues(issues: PlannedIssueDraft[]): PlannedIssueDraft[] {
   const unique: PlannedIssueDraft[] = [];
 
   for (const issue of issues) {
-    const key = normalizeTitle(issue.title);
+    const key = normalizePlannedIssueComparisonTitle(issue.title);
     if (seen.has(key)) {
       continue;
     }

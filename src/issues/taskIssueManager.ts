@@ -2,6 +2,7 @@ import { GitHubApiError, GitHubClient } from "../github/githubClient.js";
 
 const IN_PROGRESS_LABEL = "in progress";
 const COMPLETED_LABEL = "completed";
+const FOLLOW_UP_TITLE_SUFFIX_PATTERN = /\s*\(follow-up\s+\d+\)\s*$/i;
 
 type GitHubLabel = {
   name: string;
@@ -70,6 +71,17 @@ type IssueEvidenceSource = {
   title: string;
   body: string | null;
 };
+
+function normalizeIssueTitle(title: string): string {
+  return title.trim().toLowerCase();
+}
+
+export function normalizePlannedIssueComparisonTitle(title: string): string {
+  return normalizeIssueTitle(title)
+    .replace(FOLLOW_UP_TITLE_SUFFIX_PATTERN, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 function buildFollowUpTemplate(template: IssueTemplate, sequence: number): IssueTemplate {
   return {
@@ -356,7 +368,7 @@ export class TaskIssueManager {
     const recentClosed = await this.listRecentClosedIssues();
     const existingTitles = new Set(
       [...openIssues.map((issue) => issue.title), ...recentClosed.map((issue) => issue.title)].map((title) =>
-        title.trim().toLowerCase()
+        normalizePlannedIssueComparisonTitle(title)
       ),
     );
 
@@ -370,7 +382,7 @@ export class TaskIssueManager {
 
       const title = plannedIssue.title.trim();
       const description = plannedIssue.description.trim();
-      const normalizedTitle = title.toLowerCase();
+      const normalizedTitle = normalizePlannedIssueComparisonTitle(title);
       if (!title || existingTitles.has(normalizedTitle)) {
         continue;
       }
