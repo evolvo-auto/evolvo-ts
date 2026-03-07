@@ -2,6 +2,7 @@ import "dotenv/config";
 import { pathToFileURL } from "node:url";
 import type { CodingAgentRunResult } from "./agents/runCodingAgent.js";
 import { runCodingAgent } from "./agents/runCodingAgent.js";
+import { runPlannerAgent } from "./agents/plannerAgent.js";
 import { WORK_DIR } from "./constants/workDir.js";
 import { GitHubClient } from "./github/githubClient.js";
 import { getGitHubConfig } from "./github/githubConfig.js";
@@ -14,7 +15,6 @@ import { writeRuntimeReadinessSignal } from "./runtime/runtimeReadiness.js";
 import { runPostMergeSelfRestart } from "./runtime/selfRestart.js";
 import {
   DEFAULT_PROMPT as LOOP_DEFAULT_PROMPT,
-  bootstrapStartupIssues,
   buildPromptFromIssue,
   formatIssueForLog,
   getRunLoopRetryDelayMs,
@@ -43,7 +43,6 @@ import {
 import { runIssueCommand } from "./issues/runIssueCommand.js";
 import { hasIssueLabel, isChallengeIssue } from "./issues/challengeIssue.js";
 import { TaskIssueManager, type IssueSummary } from "./issues/taskIssueManager.js";
-import { generateStartupIssueTemplates } from "./issues/startupIssueBootstrap.js";
 
 const MAX_ISSUE_CYCLES = 100;
 const MIN_REPLENISH_ISSUES = 3;
@@ -199,46 +198,28 @@ export async function main(): Promise<void> {
         const selectedIssue = selectIssueForWork(retryEligibleIssues);
 
         if (!selectedIssue) {
-          const isStartupBootstrap = cycle === 1 && openIssues.length === 0;
-          let analysisTemplates:
-            | Array<{
-              title: string;
-              description: string;
-            }>
-            | undefined;
-          if (!isStartupBootstrap && openIssues.length === 0) {
-            try {
-              analysisTemplates = await generateStartupIssueTemplates(WORK_DIR, { targetCount: MIN_REPLENISH_ISSUES });
-            } catch (error) {
-              if (error instanceof Error) {
-                console.error(`Queue analysis for replenishment templates failed: ${error.message}`);
-              } else {
-                console.error("Queue analysis for replenishment templates failed with an unknown error.");
-              }
-            }
-          }
-          const createdIssues = isStartupBootstrap
-            ? await bootstrapStartupIssues(issueManager, WORK_DIR)
-            : (
-                await issueManager.replenishSelfImprovementIssues({
-                  minimumIssueCount: MIN_REPLENISH_ISSUES,
-                  maximumOpenIssues: MAX_OPEN_ISSUES,
-                  ...(analysisTemplates && analysisTemplates.length > 0 ? { templates: analysisTemplates } : {}),
-                })
-              ).created;
+          const plannerResult = await runPlannerAgent({
+            cycle,
+            openIssueCount: openIssues.length,
+            minimumIssueCount: MIN_REPLENISH_ISSUES,
+            maximumOpenIssues: MAX_OPEN_ISSUES,
+            issueManager,
+            workDir: WORK_DIR,
+          });
+          const createdIssues = plannerResult.created;
           logCycleQueueHealth({
             cycle,
             openCount: openIssues.length,
             selectedIssue: null,
             queueAction: {
-              type: isStartupBootstrap ? "bootstrap" : "replenish",
+              type: plannerResult.startupBootstrap ? "bootstrap" : "replenish",
               createdCount: createdIssues.length,
               outcome: createdIssues.length > 0 ? "continue" : "stop",
             },
           });
 
           if (createdIssues.length > 0) {
-            if (isStartupBootstrap) {
+            if (plannerResult.startupBootstrap) {
               console.log("No open issues found on startup. Bootstrapped issue queue from repository analysis.");
             }
             logCreatedIssues(createdIssues);
