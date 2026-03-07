@@ -52,6 +52,18 @@ function resetMockApiStateToEmptyQueue(): void {
   mockApiState.createdIssueTitles = [];
 }
 
+function resetMockApiStateToEmptyQueueWithClosedTitles(titles: string[]): void {
+  mockApiState.issues = titles.map((title, index) => ({
+    number: index + 1,
+    title,
+    body: "closed historical issue",
+    state: "closed",
+    labels: [{ name: "completed" }],
+  }));
+  mockApiState.nextIssueNumber = 100;
+  mockApiState.createdIssueTitles = [];
+}
+
 function findIssue(issueNumber: number): MockIssue {
   const issue = mockApiState.issues.find((candidate) => candidate.number === issueNumber);
   if (!issue) {
@@ -314,5 +326,32 @@ describe("main replenishment integration", () => {
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(1, "Issue #100: Bootstrap issue A\n\nfrom startup analysis");
     expect(console.log).not.toHaveBeenCalledWith(DEFAULT_PROMPT);
     expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
+  });
+
+  it("bootstraps follow-up startup issues when matching titles already exist in closed history", async () => {
+    resetMockApiStateToEmptyQueueWithClosedTitles([
+      "Bootstrap issue A",
+      "Bootstrap issue A (follow-up 1)",
+    ]);
+    generateStartupIssueTemplatesMock.mockResolvedValueOnce([
+      { title: "Bootstrap issue A", description: "from startup analysis" },
+      { title: "Bootstrap issue B", description: "from startup analysis" },
+      { title: "Bootstrap issue C", description: "from startup analysis" },
+    ]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(mockApiState.createdIssueTitles).toEqual([
+      "Bootstrap issue A (follow-up 2)",
+      "Bootstrap issue B",
+      "Bootstrap issue C",
+    ]);
+    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:3");
+    expect(console.log).toHaveBeenCalledWith("Cycle 2 queue health: open=3 selected=#100");
+    expect(runCodingAgentMock).toHaveBeenNthCalledWith(
+      1,
+      "Issue #100: Bootstrap issue A (follow-up 2)\n\nfrom startup analysis\n\nFollow-up: address remaining gaps discovered after earlier work.",
+    );
   });
 });
