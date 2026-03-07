@@ -335,6 +335,41 @@ function getHighestSnowflakeId(ids: string[]): string {
   return highest;
 }
 
+function compareSnowflakeIds(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+
+  return BigInt(left) < BigInt(right) ? -1 : 1;
+}
+
+async function drainControlChannelMessages(
+  config: DiscordControlConfig,
+  afterId: string | null,
+): Promise<DiscordControlMessage[]> {
+  const backlog: DiscordControlMessage[] = [];
+  let nextAfterId = afterId;
+
+  while (true) {
+    const page = await fetchControlChannelMessages(config, { afterId: nextAfterId, limit: 50 });
+    if (page.length === 0) {
+      return backlog.sort((left, right) => compareSnowflakeIds(left.id, right.id));
+    }
+
+    backlog.push(...page);
+
+    const highestId = getHighestSnowflakeId(page.map((message) => message.id));
+    if (highestId === nextAfterId) {
+      return backlog.sort((left, right) => compareSnowflakeIds(left.id, right.id));
+    }
+
+    nextAfterId = highestId;
+    if (page.length < 50) {
+      return backlog.sort((left, right) => compareSnowflakeIds(left.id, right.id));
+    }
+  }
+}
+
 async function waitForOperatorDecision(
   config: DiscordControlConfig,
   promptMessageId: string,
@@ -477,19 +512,13 @@ export async function pollDiscordGracefulShutdownCommand(
 
   try {
     const afterId = await initializeDiscordControlCursor(config, workDir);
-    const messages = await fetchControlChannelMessages(config, { afterId, limit: 50 });
+    const messages = await drainControlChannelMessages(config, afterId);
     if (messages.length === 0) {
       return null;
     }
 
     let gracefulShutdownRequest: GracefulShutdownRequest | null = null;
-    const orderedMessages = [...messages].sort((left, right) => {
-      if (left.id === right.id) {
-        return 0;
-      }
-
-      return BigInt(left.id) < BigInt(right.id) ? -1 : 1;
-    });
+    const orderedMessages = [...messages].sort((left, right) => compareSnowflakeIds(left.id, right.id));
 
     for (const message of orderedMessages) {
       if (message.author?.id !== config.operatorUserId) {
@@ -566,9 +595,9 @@ export async function pollDiscordGracefulShutdownCommand(
           }
         }
       }
-
-      await writeDiscordControlCursor(workDir, message.id);
     }
+
+    await writeDiscordControlCursor(workDir, getHighestSnowflakeId(orderedMessages.map((message) => message.id)));
 
     return gracefulShutdownRequest;
   } catch (error) {
