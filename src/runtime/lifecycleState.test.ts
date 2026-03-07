@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildLifecycleStateComment,
   readCanonicalLifecycleState,
@@ -16,6 +16,8 @@ describe("lifecycleState", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     await Promise.all(tempDirs.map((directory) => rm(directory, { recursive: true, force: true })));
   });
 
@@ -208,6 +210,35 @@ describe("lifecycleState", () => {
     expect(Object.keys(state.issues)).toEqual(["12"]);
     expect(state.issues["12"]?.state).toBe("blocked");
     expect(state.version).toBe(1);
+  });
+
+  it("preserves malformed lifecycle state JSON and resets to a default store", async () => {
+    vi.useFakeTimers();
+    const recoveryAtMs = new Date("2026-03-07T21:00:00.000Z").getTime();
+    vi.setSystemTime(recoveryAtMs);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const evolvoDir = join(workDir, ".evolvo");
+    const statePath = join(evolvoDir, "runtime-lifecycle-state.json");
+    const corruptPath = join(evolvoDir, `runtime-lifecycle-state.corrupt-${recoveryAtMs}.json`);
+    await mkdir(evolvoDir, { recursive: true });
+    await writeFile(statePath, "{\"issues\":", "utf8");
+
+    const state = await readCanonicalLifecycleState(workDir);
+
+    expect(state).toEqual({
+      version: 1,
+      issues: {},
+    });
+    expect(await readFile(corruptPath, "utf8")).toBe("{\"issues\":");
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual({
+      version: 1,
+      issues: {},
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      `Recovered malformed lifecycle state store at ${statePath}; preserved corrupt file at ${corruptPath}.`,
+    );
   });
 
   it("formats canonical lifecycle comments with canonical and derived sections", () => {

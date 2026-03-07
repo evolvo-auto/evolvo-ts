@@ -105,11 +105,23 @@ function getStatePath(workDir: string): string {
   return join(workDir, EVOLVO_DIRECTORY_NAME, LIFECYCLE_STATE_FILE_NAME);
 }
 
+function getCorruptStatePath(workDir: string, atMs = Date.now()): string {
+  return join(
+    workDir,
+    EVOLVO_DIRECTORY_NAME,
+    `runtime-lifecycle-state.corrupt-${Math.max(0, Math.floor(atMs))}.json`,
+  );
+}
+
 function createDefaultStateStore(): LifecycleStateStore {
   return {
     version: LIFECYCLE_STATE_VERSION,
     issues: {},
   };
+}
+
+function isMalformedStateStoreError(error: unknown): boolean {
+  return error instanceof SyntaxError;
 }
 
 function normalizeStateStore(raw: unknown): LifecycleStateStore {
@@ -194,6 +206,9 @@ export async function readCanonicalLifecycleState(workDir: string): Promise<Life
     if (errorCode === "ENOENT") {
       return createDefaultStateStore();
     }
+    if (isMalformedStateStoreError(error)) {
+      return recoverMalformedLifecycleState(workDir, statePath);
+    }
 
     throw error;
   }
@@ -202,6 +217,17 @@ export async function readCanonicalLifecycleState(workDir: string): Promise<Life
 async function writeCanonicalLifecycleState(workDir: string, state: LifecycleStateStore): Promise<void> {
   await fs.mkdir(join(workDir, EVOLVO_DIRECTORY_NAME), { recursive: true });
   await fs.writeFile(getStatePath(workDir), `${JSON.stringify(normalizeStateStore(state), null, 2)}\n`, "utf8");
+}
+
+async function recoverMalformedLifecycleState(workDir: string, statePath: string): Promise<LifecycleStateStore> {
+  const corruptPath = getCorruptStatePath(workDir);
+  await fs.rename(statePath, corruptPath);
+  const defaultStateStore = createDefaultStateStore();
+  await writeCanonicalLifecycleState(workDir, defaultStateStore);
+  console.warn(
+    `Recovered malformed lifecycle state store at ${statePath}; preserved corrupt file at ${corruptPath}.`,
+  );
+  return defaultStateStore;
 }
 
 export async function transitionCanonicalLifecycleState(
