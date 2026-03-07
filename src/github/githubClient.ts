@@ -3,12 +3,14 @@ import type { GitHubConfig } from "./githubConfig.js";
 export class GitHubApiError extends Error {
   public readonly status: number;
   public readonly responseBody: unknown;
+  public readonly responseHeaders: Headers | null;
 
-  public constructor(message: string, status: number, responseBody: unknown) {
+  public constructor(message: string, status: number, responseBody: unknown, responseHeaders?: Headers | null) {
     super(message);
     this.name = "GitHubApiError";
     this.status = status;
     this.responseBody = responseBody;
+    this.responseHeaders = responseHeaders ?? null;
   }
 }
 
@@ -97,7 +99,7 @@ export class GitHubClient {
 
         if (!response.ok) {
           const message = this.getErrorMessage(responseBody, response.status);
-          throw new GitHubApiError(message, response.status, responseBody);
+          throw new GitHubApiError(message, response.status, responseBody, response.headers);
         }
 
         return responseBody as T;
@@ -107,7 +109,7 @@ export class GitHubClient {
           throw error;
         }
 
-        await this.waitBeforeRetry(attempt);
+        await this.waitBeforeRetry(this.getRetryDelayMs(attempt, error));
       }
     }
 
@@ -169,11 +171,57 @@ export class GitHubClient {
     return false;
   }
 
-  private async waitBeforeRetry(attempt: number): Promise<void> {
-    const delayMs = this.retryBaseDelayMs * attempt;
+  private async waitBeforeRetry(delayMs: number): Promise<void> {
+    const normalizedDelayMs = Math.max(0, Math.floor(delayMs));
     await new Promise((resolve) => {
-      setTimeout(resolve, delayMs);
+      setTimeout(resolve, normalizedDelayMs);
     });
+  }
+
+  private getRetryDelayMs(attempt: number, error: unknown): number {
+    const attemptDelayMs = this.retryBaseDelayMs * attempt;
+    if (!(error instanceof GitHubApiError)) {
+      return attemptDelayMs;
+    }
+
+    const retryAfterDelayMs = this.parseRetryAfterDelayMs(error.responseHeaders);
+    const rateLimitResetDelayMs = this.parseRateLimitResetDelayMs(error.responseHeaders);
+    const advertisedDelayMs = Math.max(retryAfterDelayMs, rateLimitResetDelayMs);
+    return Math.max(attemptDelayMs, advertisedDelayMs);
+  }
+
+  private parseRetryAfterDelayMs(headers: Headers | null): number {
+    const rawValue = headers?.get("retry-after")?.trim();
+    if (!rawValue) {
+      return 0;
+    }
+
+    const seconds = Number(rawValue);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.ceil(seconds * 1000);
+    }
+
+    const parsedDateMs = Date.parse(rawValue);
+    if (Number.isNaN(parsedDateMs)) {
+      return 0;
+    }
+
+    return Math.max(0, parsedDateMs - Date.now());
+  }
+
+  private parseRateLimitResetDelayMs(headers: Headers | null): number {
+    const rawValue = headers?.get("x-ratelimit-reset")?.trim();
+    if (!rawValue) {
+      return 0;
+    }
+
+    const resetAtSeconds = Number(rawValue);
+    if (!Number.isFinite(resetAtSeconds) || resetAtSeconds < 0) {
+      return 0;
+    }
+
+    const resetAtMs = Math.floor(resetAtSeconds * 1000);
+    return Math.max(0, resetAtMs - Date.now());
   }
 
   private async readResponseBody(response: Response): Promise<unknown> {

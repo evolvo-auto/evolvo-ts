@@ -121,6 +121,79 @@ describe("GitHubClient", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("uses Retry-After header delay before retrying", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ message: "Rate limit exceeded" }), {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+              "retry-after": "2",
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify([{ number: 9 }]), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+
+      const client = createClient({ maxRetries: 1, retryBaseDelayMs: 1 });
+      const resultPromise = client.get<Array<{ number: number }>>("?state=open");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(resultPromise).resolves.toEqual([{ number: 9 }]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses X-RateLimit-Reset header delay before retrying", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      const rateLimitResetEpochSeconds = Math.floor((Date.now() + 3_000) / 1_000);
+
+      fetchMock
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ message: "Service unavailable" }), {
+            status: 503,
+            headers: {
+              "content-type": "application/json",
+              "x-ratelimit-reset": String(rateLimitResetEpochSeconds),
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ number: 7 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+
+      const client = createClient({ maxRetries: 1, retryBaseDelayMs: 1 });
+      const resultPromise = client.get<{ number: number }>("/7");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(resultPromise).resolves.toEqual({ number: 7 });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not retry non-retryable statuses", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ message: "Bad credentials" }), {
