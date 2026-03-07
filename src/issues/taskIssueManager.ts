@@ -331,9 +331,10 @@ function selectTemplatesForCreation(options: {
   const selected: IssueTemplate[] = [];
   const followUpSequenceByTemplate = new Map<string, number>();
   let cursor = 0;
+  let attempts = 0;
   const maxAttempts = Math.max(options.baseTemplates.length * options.toCreateCount * 4, 20);
 
-  while (selected.length < options.toCreateCount && cursor < maxAttempts) {
+  while (selected.length < options.toCreateCount && attempts < maxAttempts) {
     const template = options.baseTemplates[cursor % options.baseTemplates.length];
     if (!template) {
       break;
@@ -351,6 +352,7 @@ function selectTemplatesForCreation(options: {
     }
 
     followUpSequenceByTemplate.set(key, sequence + 1);
+    attempts += 1;
   }
 
   return selected;
