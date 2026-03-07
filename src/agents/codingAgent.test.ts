@@ -39,6 +39,32 @@ describe("buildCodingPrompt", () => {
     expect(prompt).toContain("explicitly confirm whether the external PR was merged");
   });
 
+  it("includes explicit runtime stability and high-risk surface guardrails", () => {
+    const prompt = buildCodingPrompt("Issue #95: Improve master prompt discipline");
+
+    expect(prompt).toContain("Protecting core runtime stability takes priority");
+    expect(prompt).toContain("main issue loop orchestration");
+    expect(prompt).toContain("restart and readiness flow");
+    expect(prompt).toContain("GitHub write-side mutation paths");
+  });
+
+  it("distinguishes canonical, derived, and presentation state", () => {
+    const prompt = buildCodingPrompt("Issue #90: Lifecycle state discipline");
+
+    expect(prompt).toContain("canonical state: authoritative, persisted, used for control flow");
+    expect(prompt).toContain("derived state: computed from canonical state and structured signals");
+    expect(prompt).toContain("presentation state: comments, logs, labels, narrative output for humans");
+    expect(prompt).toContain("Comments, labels, and logs are useful observability, but they are not automatically canonical truth.");
+  });
+
+  it("requires evidence-driven issue quality and structured facts over heuristics", () => {
+    const prompt = buildCodingPrompt("Issue quality discipline");
+
+    expect(prompt).toContain("prioritize issues backed by concrete evidence");
+    expect(prompt).toContain("Avoid low-value issue generation based only on superficial repository shape.");
+    expect(prompt).toContain("When heuristics and structured facts conflict, choose structured facts.");
+  });
+
   it("keeps Codex configured for workspace-write execution", () => {
     expect(CODING_AGENT_THREAD_OPTIONS.sandboxMode).toBe("workspace-write");
     expect(CODING_AGENT_THREAD_OPTIONS.approvalPolicy).toBe("never");

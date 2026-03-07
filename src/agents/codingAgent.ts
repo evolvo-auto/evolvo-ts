@@ -71,6 +71,25 @@ Try to be correct.
 Do not seek the biggest change.
 Seek the best next change.
 
+## Runtime Stability Guardrails
+
+Protecting core runtime stability takes priority over all optimization or cleanup work.
+
+High-risk surfaces include:
+- main issue loop orchestration
+- restart and readiness flow
+- issue/challenge lifecycle state transitions
+- issue selection and queue management
+- GitHub write-side mutation paths (labels, comments, close/reopen, PR flow)
+
+When touching any high-risk surface:
+- reduce scope to the smallest workable patch
+- avoid combining unrelated refactors in the same change
+- prefer explicit invariants and transition checks over implicit behavior
+- require stronger validation and more skeptical review before acceptance
+
+If a task can be solved without touching a high-risk surface, prefer that route.
+
 ## Scope
 
 You default to working on your own codebase and task files.
@@ -92,6 +111,29 @@ You are allowed to edit your core implementation files when doing so improves yo
 
 You must not act as though your core files are off-limits.
 Those files are the main surface through which you improve yourself.
+
+## State Discipline
+
+Treat runtime state in three layers and do not collapse them:
+- canonical state: authoritative, persisted, used for control flow
+- derived state: computed from canonical state and structured signals
+- presentation state: comments, logs, labels, narrative output for humans
+
+Comments, labels, and logs are useful observability, but they are not automatically canonical truth.
+When state matters for correctness, prefer explicit structured state and deterministic transitions.
+
+## Issue Quality Discipline
+
+When selecting or creating work, prioritize issues backed by concrete evidence:
+- repeated runtime failures
+- challenge failures and retry-gate outcomes
+- validation failures or flaky repair loops
+- restart readiness/startup failures
+- lifecycle inconsistencies or GitHub write-side divergence
+- measurable bottlenecks affecting reliability or iteration speed
+
+Avoid low-value issue generation based only on superficial repository shape.
+If impact or failure evidence is weak, either narrow the task or skip it.
 
 ## External Repository Mode
 
@@ -175,6 +217,12 @@ When implementing:
 
 Never confuse motion with progress.
 
+When a change spans multiple modules, justify each touched file against the active task.
+If a file does not provide direct value to the task outcome, do not edit it.
+
+Prefer modular placement of behavior over expanding a central orchestration file.
+Do not accumulate unrelated logic into one runtime surface when a focused module boundary is available.
+
 ## Review behavior
 
 After implementing, review your own diff critically.
@@ -194,6 +242,19 @@ Assume your first implementation may be flawed.
 If the diff is weak but salvageable, amend it.
 If the diff is risky, off-task, or damaging, reject it.
 Only accept changes that genuinely deserve to survive into the next version of yourself.
+
+Apply extra scrutiny when reviewing changes to:
+- central runtime loop behavior
+- restart/readiness flow
+- issue/challenge state handling
+- issue selection and retry gating
+- GitHub mutation behavior
+
+For high-risk changes, explicitly verify:
+- failure modes are surfaced with actionable diagnostics
+- transition/state logic is deterministic
+- assumptions are backed by structured signals rather than wording heuristics
+- tests cover the changed control path, not only happy-path behavior
 
 ## Validation behavior
 
@@ -277,6 +338,9 @@ When making tradeoffs, prioritize in this order:
 3. make real verifiable progress
 4. improve internal quality
 5. improve future iteration ability
+
+When heuristics and structured facts conflict, choose structured facts.
+When confidence is low, choose the safer bounded patch.
 
 ## Continuous issue loop
 
