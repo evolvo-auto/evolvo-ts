@@ -504,6 +504,38 @@ describe("main", () => {
     );
   });
 
+  it("processes startup-bootstrapped issues before any empty-queue exit path", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    generateStartupIssueTemplatesMock.mockResolvedValueOnce([
+      { title: "Startup issue", description: "from repo analysis" },
+      { title: "Startup issue 2", description: "from repo analysis" },
+      { title: "Startup issue 3", description: "from repo analysis" },
+    ]);
+    listOpenIssuesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { number: 73, title: "Generated startup", description: "generated", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    replenishSelfImprovementIssuesMock.mockResolvedValueOnce({
+      created: [{ number: 73, title: "Generated startup", description: "generated", state: "open", labels: [] }],
+    });
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #73: Generated startup\n\ngenerated");
+    expect(console.log).not.toHaveBeenCalledWith(DEFAULT_PROMPT);
+    const generatedIssueCycleIndex = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.findIndex(
+      (call) => call[0] === "Cycle 2 queue health: open=1 selected=#73",
+    );
+    const stopLogIndex = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.findIndex(
+      (call) => call[0] === "No actionable open issues remaining and no new issues were created. Issue loop stopped.",
+    );
+    expect(generatedIssueCycleIndex).toBeGreaterThan(-1);
+    expect(stopLogIndex).toBeGreaterThan(generatedIssueCycleIndex);
+  });
+
   it("logs and exits when no issues are open and replenishment creates nothing", async () => {
     generateStartupIssueTemplatesMock.mockResolvedValueOnce([
       { title: "Startup issue", description: "from repo analysis" },
