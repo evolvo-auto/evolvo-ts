@@ -74,15 +74,38 @@ export function logCycleQueueHealth(options: {
   );
 }
 
-function logStartupBootstrapRecoveryGuidance(context: {
+function formatBootstrapError(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`;
+  }
+
+  return "unknown error";
+}
+
+function logStartupBootstrapRecoveryGuidance(options: {
   context: "repository-derived bootstrap" | "fallback bootstrap";
   targetCount: number;
   templateCount: number | "default";
   createdCount: number;
+  workDir: string;
+  repositoryAnalysisError?: unknown;
+  fallbackCreationError?: unknown;
 }): void {
-  console.error(`Startup ${context.context} created 0 issues. Issue queue remains empty.`);
+  console.error(`Startup ${options.context} created 0 issues. Issue queue remains empty.`);
   console.error(
-    `Startup bootstrap diagnostics: context=${context.context} targetCount=${context.targetCount} templateCount=${context.templateCount} createdCount=${context.createdCount}.`,
+    `Startup bootstrap diagnostics: context=${options.context} targetCount=${options.targetCount} templateCount=${options.templateCount} createdCount=${options.createdCount}.`,
+  );
+  console.error(
+    `Startup bootstrap environment: workDir=${options.workDir}.`,
+  );
+  if (options.repositoryAnalysisError) {
+    console.error(`Startup bootstrap primary error: ${formatBootstrapError(options.repositoryAnalysisError)}.`);
+  }
+  if (options.fallbackCreationError) {
+    console.error(`Startup bootstrap fallback error: ${formatBootstrapError(options.fallbackCreationError)}.`);
+  }
+  console.error(
+    "Startup bootstrap next actions: run `pnpm dev -- issues list`; if queue is still empty, run `pnpm dev -- issues create \"<title>\" \"<description>\"`.",
   );
   console.error(
     "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
@@ -108,6 +131,7 @@ export async function bootstrapStartupIssues(issueManager: TaskIssueManager, wor
         targetCount,
         templateCount: templates.length,
         createdCount: replenishment.created.length,
+        workDir,
       });
     }
 
@@ -133,6 +157,8 @@ export async function bootstrapStartupIssues(issueManager: TaskIssueManager, wor
           targetCount,
           templateCount: "default",
           createdCount: replenishment.created.length,
+          workDir,
+          repositoryAnalysisError: error,
         });
       }
 
@@ -149,6 +175,9 @@ export async function bootstrapStartupIssues(issueManager: TaskIssueManager, wor
         targetCount,
         templateCount: "default",
         createdCount: 0,
+        workDir,
+        repositoryAnalysisError: error,
+        fallbackCreationError: fallbackError,
       });
       return [];
     }

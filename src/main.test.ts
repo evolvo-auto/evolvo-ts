@@ -493,6 +493,10 @@ describe("main", () => {
     expect(console.error).toHaveBeenCalledWith(
       "Startup bootstrap diagnostics: context=repository-derived bootstrap targetCount=3 templateCount=3 createdCount=0.",
     );
+    expect(console.error).toHaveBeenCalledWith("Startup bootstrap environment: workDir=/tmp/evolvo.");
+    expect(console.error).toHaveBeenCalledWith(
+      "Startup bootstrap next actions: run `pnpm dev -- issues list`; if queue is still empty, run `pnpm dev -- issues create \"<title>\" \"<description>\"`.",
+    );
     expect(console.error).toHaveBeenCalledWith(
       "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
     );
@@ -541,6 +545,12 @@ describe("main", () => {
     expect(console.error).toHaveBeenCalledWith(
       "Startup bootstrap diagnostics: context=fallback bootstrap targetCount=3 templateCount=default createdCount=0.",
     );
+    expect(console.error).toHaveBeenCalledWith("Startup bootstrap environment: workDir=/tmp/evolvo.");
+    expect(console.error).toHaveBeenCalledWith("Startup bootstrap primary error: Error: analysis boom.");
+    expect(console.error).toHaveBeenCalledWith("Startup bootstrap fallback error: Error: issue create denied.");
+    expect(console.error).toHaveBeenCalledWith(
+      "Startup bootstrap next actions: run `pnpm dev -- issues list`; if queue is still empty, run `pnpm dev -- issues create \"<title>\" \"<description>\"`.",
+    );
     expect(console.error).toHaveBeenCalledWith(
       "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
     );
@@ -565,6 +575,11 @@ describe("main", () => {
     expect(console.error).toHaveBeenCalledWith("Startup fallback bootstrap created 0 issues. Issue queue remains empty.");
     expect(console.error).toHaveBeenCalledWith(
       "Startup bootstrap diagnostics: context=fallback bootstrap targetCount=3 templateCount=default createdCount=0.",
+    );
+    expect(console.error).toHaveBeenCalledWith("Startup bootstrap environment: workDir=/tmp/evolvo.");
+    expect(console.error).toHaveBeenCalledWith("Startup bootstrap primary error: Error: analysis boom.");
+    expect(console.error).toHaveBeenCalledWith(
+      "Startup bootstrap next actions: run `pnpm dev -- issues list`; if queue is still empty, run `pnpm dev -- issues create \"<title>\" \"<description>\"`.",
     );
     expect(console.error).toHaveBeenCalledWith(
       "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
