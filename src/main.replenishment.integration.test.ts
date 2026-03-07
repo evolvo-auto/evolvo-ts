@@ -46,6 +46,12 @@ function resetMockApiState(): void {
   mockApiState.createdIssueTitles = [];
 }
 
+function resetMockApiStateToEmptyQueue(): void {
+  mockApiState.issues = [];
+  mockApiState.nextIssueNumber = 100;
+  mockApiState.createdIssueTitles = [];
+}
+
 function findIssue(issueNumber: number): MockIssue {
   const issue = mockApiState.issues.find((candidate) => candidate.number === issueNumber);
   if (!issue) {
@@ -279,6 +285,34 @@ describe("main replenishment integration", () => {
     expect(console.log).not.toHaveBeenCalledWith(
       "No actionable open issues remaining and no new issues were created. Issue loop stopped.",
     );
+    expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
+  });
+
+  it("bootstraps startup issues for an empty queue and proceeds into normal issue selection", async () => {
+    resetMockApiStateToEmptyQueue();
+    generateStartupIssueTemplatesMock.mockResolvedValueOnce([
+      { title: "Bootstrap issue A", description: "from startup analysis" },
+      { title: "Bootstrap issue B", description: "from startup analysis" },
+      { title: "Bootstrap issue C", description: "from startup analysis" },
+    ]);
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(generateStartupIssueTemplatesMock).toHaveBeenCalledWith("/tmp/evolvo", { targetCount: 3 });
+    expect(mockApiState.createdIssueTitles).toEqual([
+      "Bootstrap issue A",
+      "Bootstrap issue B",
+      "Bootstrap issue C",
+    ]);
+    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:3");
+    expect(console.log).toHaveBeenCalledWith(
+      "No open issues found on startup. Bootstrapped issue queue from repository analysis.",
+    );
+    expect(console.log).toHaveBeenCalledWith("Cycle 2 queue health: open=3 selected=#100");
+    expect(runCodingAgentMock).toHaveBeenCalledTimes(2);
+    expect(runCodingAgentMock).toHaveBeenNthCalledWith(1, "Issue #100: Bootstrap issue A\n\nfrom startup analysis");
+    expect(console.log).not.toHaveBeenCalledWith(DEFAULT_PROMPT);
     expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
   });
 });
