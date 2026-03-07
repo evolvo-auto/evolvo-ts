@@ -125,6 +125,36 @@ describe("TaskIssueManager", () => {
     expect(client.get).toHaveBeenNthCalledWith(2, "?state=closed&sort=updated&direction=desc&per_page=100&page=1");
   });
 
+  it("prioritizes evidence-backed templates from recurring workflow failures", async () => {
+    const client = createClientMock();
+    client.get
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        createIssue({
+          number: 77,
+          state: "closed",
+          title: "Challenge workflow friction follow-up",
+          body: "Challenge-Failure-Category: workflow_failure\nPull request merge and retry flow failed repeatedly.",
+        }),
+      ]);
+    client.post.mockResolvedValueOnce(
+      createIssue({ number: 31, title: "Harden run loop retry handling for transient GitHub failures" }),
+    );
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.replenishSelfImprovementIssues({
+      minimumIssueCount: 1,
+      maximumOpenIssues: 5,
+    });
+
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0]?.title).toBe("Harden run loop retry handling for transient GitHub failures");
+    expect(client.post).toHaveBeenCalledWith(
+      "",
+      expect.objectContaining({ title: "Harden run loop retry handling for transient GitHub failures" }),
+    );
+  });
+
   it("avoids duplicates against recent issue history and limits creations by open slots", async () => {
     const client = createClientMock();
     client.get
