@@ -221,7 +221,7 @@ describe("runCodingAgent", () => {
     );
   });
 
-  it("flags successful pull request merges from agent messages", async () => {
+  it("does not infer pull request merges from agent messages alone", async () => {
     startThreadMock.mockReturnValue({ runStreamed: runStreamedMock });
     runStreamedMock.mockResolvedValue(createEventStream([
       {
@@ -238,12 +238,42 @@ describe("runCodingAgent", () => {
 
     await expect(runCodingAgent("Merge and continue")).resolves.toEqual(
       expect.objectContaining({
-        mergedPullRequest: true,
+        mergedPullRequest: false,
         summary: expect.objectContaining({
           reviewOutcome: "accepted",
         }),
       }),
     );
+  });
+
+  it("tracks pull request creation from successful gh command execution", async () => {
+    startThreadMock.mockReturnValue({ runStreamed: runStreamedMock });
+    runStreamedMock.mockResolvedValue(createEventStream([
+      {
+        type: "item.completed",
+        item: {
+          id: "1",
+          type: "command_execution",
+          command: "gh pr create --title \"self\" --body \"self\"",
+          exit_code: 0,
+          aggregated_output: "https://github.com/owner/repo/pull/88",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "2",
+          type: "file_change",
+          status: "completed",
+          changes: [{ kind: "add", path: "notes.md" }],
+        },
+      },
+    ]));
+
+    const { runCodingAgent } = await import("./runCodingAgent.js");
+    const result = await runCodingAgent("Create self repository pull request");
+
+    expect(result.summary.pullRequestCreated).toBe(true);
   });
 
   it("captures external repository and pull request evidence from command output", async () => {
@@ -296,12 +326,88 @@ describe("runCodingAgent", () => {
       expect.objectContaining({
         mergedPullRequest: true,
         summary: expect.objectContaining({
+          pullRequestCreated: true,
           externalRepositories: ["https://github.com/other-org/other-repo"],
           externalPullRequests: ["https://github.com/other-org/other-repo/pull/12"],
           mergedExternalPullRequest: true,
         }),
       }),
     );
+  });
+
+  it("tracks external pull request merge from structured gh repo arguments", async () => {
+    vi.stubEnv("GITHUB_OWNER", "owner");
+    vi.stubEnv("GITHUB_REPO", "repo");
+    startThreadMock.mockReturnValue({ runStreamed: runStreamedMock });
+    runStreamedMock.mockResolvedValue(createEventStream([
+      {
+        type: "item.completed",
+        item: {
+          id: "1",
+          type: "command_execution",
+          command: "gh pr merge 12 --repo other-org/other-repo --merge",
+          exit_code: 0,
+          aggregated_output: "Merged.",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "2",
+          type: "file_change",
+          status: "completed",
+          changes: [{ kind: "add", path: "notes.md" }],
+        },
+      },
+    ]));
+
+    const { runCodingAgent } = await import("./runCodingAgent.js");
+    const result = await runCodingAgent("Complete external repo workflow");
+
+    expect(result.mergedPullRequest).toBe(true);
+    expect(result.summary.mergedExternalPullRequest).toBe(true);
+    expect(result.summary.externalRepositories).toContain("https://github.com/other-org/other-repo");
+  });
+
+  it("does not treat arbitrary command text as validation execution", async () => {
+    startThreadMock.mockReturnValue({ runStreamed: runStreamedMock });
+    runStreamedMock.mockResolvedValue(createEventStream([
+      {
+        type: "item.started",
+        item: {
+          id: "1",
+          type: "command_execution",
+          command: "echo test checklist",
+          aggregated_output: "",
+          status: "in_progress",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "1",
+          type: "command_execution",
+          command: "echo test checklist",
+          exit_code: 0,
+          aggregated_output: "test checklist",
+          status: "completed",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "2",
+          type: "agent_message",
+          text: "done",
+        },
+      },
+    ]));
+
+    const { runCodingAgent } = await import("./runCodingAgent.js");
+    const result = await runCodingAgent("Summarize the repository");
+
+    expect(result.summary.validationCommands).toEqual([]);
+    expect(result.summary.failedValidationCommands).toEqual([]);
   });
 
   it("does not capture pull requests from the configured repository as external evidence", async () => {

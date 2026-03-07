@@ -6,13 +6,13 @@ import {
 
 const codex = new Codex();
 let activeThread: Thread | null = null;
-const MERGE_PR_COMMAND_PATTERN = /\bgh\s+pr\s+merge\b/i;
-const MERGE_PR_MESSAGE_PATTERN = /\bmerged (the )?pull request\b|\bmerged .* into main\b/i;
-const CREATE_PR_COMMAND_PATTERN = /\bgh\s+pr\s+create\b/i;
 const GITHUB_REPOSITORY_URL_PATTERN = /https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:\.git)?(?:\/)?/gi;
 const GITHUB_PULL_REQUEST_URL_PATTERN = /https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/\d+/gi;
-const INSPECTION_COMMAND_PATTERN = /\b(rg|grep|cat|sed|ls|find|fd|tree|git\s+status|git\s+diff|git\s+show)\b/i;
-const VALIDATION_COMMAND_PATTERN = /\b(validate|test|vitest|jest|typecheck|lint|build|tsc|pytest|go test|cargo test)\b/i;
+const INSPECTION_COMMAND_NAMES = new Set(["rg", "grep", "cat", "sed", "ls", "find", "fd", "tree"]);
+const INSPECTION_GIT_SUBCOMMAND_NAMES = new Set(["status", "diff", "show"]);
+const VALIDATION_COMMAND_NAMES = new Set(["vitest", "jest", "tsc", "pytest"]);
+const PACKAGE_MANAGER_COMMAND_NAMES = new Set(["pnpm", "npm", "yarn", "bun"]);
+const VALIDATION_SCRIPT_NAMES = new Set(["validate", "test", "typecheck", "lint", "build"]);
 
 export type CodingAgentRunResult = {
   mergedPullRequest: boolean;
@@ -43,6 +43,26 @@ export type CodingAgentRunSummary = {
   finalResponse: string;
 };
 
+type ParsedCommand = {
+  commandName: string;
+  args: string[];
+};
+
+type CommandContract = {
+  parsedCommand: ParsedCommand;
+  isPullRequestCreate: boolean;
+  isPullRequestMerge: boolean;
+  isInspection: boolean;
+  isValidation: boolean;
+};
+
+type RuntimeFacts = {
+  fileChangeSeen: boolean;
+  mergedPullRequest: boolean;
+  mergedExternalPullRequest: boolean;
+  pullRequestCreated: boolean;
+};
+
 function getThread(): Thread {
   if (!activeThread) {
     activeThread = codex.startThread(CODING_AGENT_THREAD_OPTIONS);
@@ -61,8 +81,37 @@ function formatFileChanges(item: Extract<ThreadItem, { type: "file_change" }>): 
 }
 
 function getCommandName(command: string): string {
-  const [commandName] = command.trim().split(/\s+/, 1);
+  const [commandName] = splitCommandTokens(command);
   return commandName || "unknown";
+}
+
+function splitCommandTokens(command: string): string[] {
+  return command.trim().split(/\s+/).filter(Boolean);
+}
+
+function stripLeadingEnvironmentAssignments(tokens: string[]): string[] {
+  let cursor = 0;
+  if (tokens[cursor] === "env") {
+    cursor += 1;
+    while (tokens[cursor]?.startsWith("-")) {
+      cursor += 1;
+    }
+  }
+
+  while (tokens[cursor]?.includes("=")) {
+    cursor += 1;
+  }
+
+  return tokens.slice(cursor);
+}
+
+function parseCommand(command: string): ParsedCommand {
+  const shellTokens = stripLeadingEnvironmentAssignments(splitCommandTokens(command));
+  const [commandName = "unknown", ...args] = shellTokens;
+  return {
+    commandName: commandName.toLowerCase(),
+    args,
+  };
 }
 
 function formatDuration(durationMs: number | undefined): string {
@@ -85,6 +134,121 @@ function getCommandDurationMs(itemId: string, commandStartTimes: Map<string, num
   }
 
   return durationMs;
+}
+
+function extractGhRepoFlagUrls(args: string[]): string[] {
+  const repositories = new Set<string>();
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--repo") {
+      continue;
+    }
+
+    const rawValue = args[index + 1];
+    if (!rawValue) {
+      continue;
+    }
+
+    const value = rawValue.replace(/^["']|["']$/g, "").trim();
+    if (!value) {
+      continue;
+    }
+
+    if (value.startsWith("https://github.com/")) {
+      repositories.add(normalizeRepositoryUrl(value));
+      continue;
+    }
+
+    const [owner, repo] = value.replace(/\/+$/, "").split("/", 2);
+    if (owner && repo) {
+      repositories.add(normalizeRepositoryUrl(`https://github.com/${owner}/${repo}`));
+    }
+  }
+
+  return [...repositories];
+}
+
+function isValidationPackageManagerCommand(commandName: string, args: string[]): boolean {
+  if (!PACKAGE_MANAGER_COMMAND_NAMES.has(commandName) || args.length === 0) {
+    return false;
+  }
+
+  const filteredArgs = args.filter((arg) => !arg.startsWith("-"));
+  if (filteredArgs.length === 0) {
+    return false;
+  }
+
+  if (commandName === "npm") {
+    const [subcommand, scriptName] = filteredArgs;
+    if (subcommand === "run" && scriptName) {
+      return VALIDATION_SCRIPT_NAMES.has(scriptName);
+    }
+
+    return VALIDATION_SCRIPT_NAMES.has(subcommand);
+  }
+
+  if (commandName === "yarn") {
+    const [subcommand, scriptName] = filteredArgs;
+    if (subcommand === "run" && scriptName) {
+      return VALIDATION_SCRIPT_NAMES.has(scriptName);
+    }
+
+    return VALIDATION_SCRIPT_NAMES.has(subcommand);
+  }
+
+  if (commandName === "bun") {
+    const [subcommand, scriptName] = filteredArgs;
+    if (subcommand === "run" && scriptName) {
+      return VALIDATION_SCRIPT_NAMES.has(scriptName);
+    }
+
+    return VALIDATION_SCRIPT_NAMES.has(subcommand);
+  }
+
+  const [subcommand] = filteredArgs;
+  return VALIDATION_SCRIPT_NAMES.has(subcommand);
+}
+
+function isValidationCommand(parsedCommand: ParsedCommand): boolean {
+  const { commandName, args } = parsedCommand;
+  if (VALIDATION_COMMAND_NAMES.has(commandName)) {
+    return true;
+  }
+
+  if (commandName === "go" && args[0] === "test") {
+    return true;
+  }
+
+  if (commandName === "cargo" && args[0] === "test") {
+    return true;
+  }
+
+  return isValidationPackageManagerCommand(commandName, args);
+}
+
+function isInspectionCommand(parsedCommand: ParsedCommand): boolean {
+  if (INSPECTION_COMMAND_NAMES.has(parsedCommand.commandName)) {
+    return true;
+  }
+
+  return parsedCommand.commandName === "git" && INSPECTION_GIT_SUBCOMMAND_NAMES.has(parsedCommand.args[0] ?? "");
+}
+
+function getCommandContract(command: string): CommandContract {
+  const parsedCommand = parseCommand(command);
+  const ghArgs = parsedCommand.commandName === "gh" ? parsedCommand.args.filter((arg) => !arg.startsWith("-")) : [];
+  const prIndex = ghArgs.indexOf("pr");
+  const isGhPrCommand = prIndex >= 0;
+  const ghPrAction = isGhPrCommand ? ghArgs[prIndex + 1] : "";
+  const isPullRequestCreate = isGhPrCommand && ghPrAction === "create";
+  const isPullRequestMerge = isGhPrCommand && ghPrAction === "merge";
+
+  return {
+    parsedCommand,
+    isPullRequestCreate,
+    isPullRequestMerge,
+    isInspection: isInspectionCommand(parsedCommand),
+    isValidation: isValidationCommand(parsedCommand),
+  };
 }
 
 function extractCommandTargets(command: string): string[] {
@@ -221,10 +385,12 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
   const externalPullRequests = new Set<string>();
   const validationCommands: CommandExecutionSummary[] = [];
   const failedValidationCommands: CommandExecutionSummary[] = [];
-  let fileChangeSeen = false;
-  let mergedPullRequest = false;
-  let mergedExternalPullRequest = false;
-  let pullRequestCreated = false;
+  const facts: RuntimeFacts = {
+    fileChangeSeen: false,
+    mergedPullRequest: false,
+    mergedExternalPullRequest: false,
+    pullRequestCreated: false,
+  };
   let finalResponse = "";
   const configuredRepositoryUrl = getConfiguredRepositoryUrl();
 
@@ -240,9 +406,6 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
       if (isExternalRepositoryUrl(pullRequestRepositoryUrl, configuredRepositoryUrl)) {
         externalPullRequests.add(pullRequestUrl);
         externalRepositories.add(pullRequestRepositoryUrl);
-        if (MERGE_PR_MESSAGE_PATTERN.test(text)) {
-          mergedExternalPullRequest = true;
-        }
       }
     }
   }
@@ -265,9 +428,6 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
       if (event.item.type === "agent_message") {
         finalResponse = event.item.text;
         captureExternalReferences(event.item.text);
-        if (MERGE_PR_MESSAGE_PATTERN.test(event.item.text)) {
-          mergedPullRequest = true;
-        }
       }
       continue;
     }
@@ -280,52 +440,68 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
       completedItems.add(event.item.id);
 
       if (event.item.type === "file_change" && event.item.status === "completed") {
-        fileChangeSeen = true;
+        facts.fileChangeSeen = true;
       }
 
       if (event.item.type === "agent_message") {
         finalResponse = event.item.text;
         captureExternalReferences(event.item.text);
-        if (MERGE_PR_MESSAGE_PATTERN.test(event.item.text)) {
-          mergedPullRequest = true;
-        }
       }
 
-      if (
-        event.item.type === "command_execution" &&
-        event.item.exit_code === 0 &&
-        MERGE_PR_COMMAND_PATTERN.test(event.item.command)
-      ) {
-        mergedPullRequest = true;
-        if (externalPullRequests.size > 0) {
-          mergedExternalPullRequest = true;
-        }
-      }
-
-      if (event.item.type === "command_execution" && CREATE_PR_COMMAND_PATTERN.test(event.item.command)) {
-        pullRequestCreated = true;
-      }
       if (event.item.type === "command_execution") {
+        const contract = getCommandContract(event.item.command);
         captureExternalReferences(event.item.command);
         captureExternalReferences(event.item.aggregated_output);
-      }
 
-      if (event.item.type === "command_execution" && INSPECTION_COMMAND_PATTERN.test(event.item.command)) {
-        for (const target of extractCommandTargets(event.item.command)) {
-          inspectedAreas.add(target);
+        for (const repositoryUrl of extractGhRepoFlagUrls(contract.parsedCommand.args)) {
+          if (isExternalRepositoryUrl(repositoryUrl, configuredRepositoryUrl)) {
+            externalRepositories.add(repositoryUrl);
+          }
         }
-      }
 
-      if (event.item.type === "command_execution" && VALIDATION_COMMAND_PATTERN.test(event.item.command)) {
-        const commandSummary: CommandExecutionSummary = {
-          command: event.item.command,
-          commandName: getCommandName(event.item.command),
-          exitCode: event.item.exit_code ?? null,
-          durationMs: getCommandDurationMs(event.item.id, commandStartTimes),
-        };
-        validationCommands.push(commandSummary);
-        if (commandSummary.exitCode !== 0) {
-          failedValidationCommands.push(commandSummary);
+        if (event.item.exit_code === 0 && contract.isPullRequestCreate) {
+          facts.pullRequestCreated = true;
+        }
+
+        if (event.item.exit_code === 0 && contract.isPullRequestMerge) {
+          facts.mergedPullRequest = true;
+          const mergeText = `${event.item.command}\n${event.item.aggregated_output}`;
+          const mergedPullRequestUrls = extractGitHubPullRequestUrls(mergeText);
+          const mergedExternal = mergedPullRequestUrls.some((pullRequestUrl) => {
+            const pullRequestRepositoryUrl = pullRequestUrl.replace(/\/pull\/\d+$/, "");
+            return isExternalRepositoryUrl(pullRequestRepositoryUrl, configuredRepositoryUrl);
+          });
+
+          const mergedRepositoryUrls = [
+            ...extractGhRepoFlagUrls(contract.parsedCommand.args),
+            ...extractGitHubRepositoryUrls(mergeText),
+          ];
+          const mergedExternalRepository = mergedRepositoryUrls.some((repositoryUrl) =>
+            isExternalRepositoryUrl(repositoryUrl, configuredRepositoryUrl)
+          );
+
+          if (mergedExternal || mergedExternalRepository) {
+            facts.mergedExternalPullRequest = true;
+          }
+        }
+
+        if (contract.isInspection) {
+          for (const target of extractCommandTargets(event.item.command)) {
+            inspectedAreas.add(target);
+          }
+        }
+
+        if (contract.isValidation) {
+          const commandSummary: CommandExecutionSummary = {
+            command: event.item.command,
+            commandName: getCommandName(event.item.command),
+            exitCode: event.item.exit_code ?? null,
+            durationMs: getCommandDurationMs(event.item.id, commandStartTimes),
+          };
+          validationCommands.push(commandSummary);
+          if (commandSummary.exitCode !== 0) {
+            failedValidationCommands.push(commandSummary);
+          }
         }
       }
 
@@ -359,20 +535,20 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
   console.log("Final answer:\n");
   console.log(finalResponse);
 
-  if (fileChangeSeen) {
+  if (facts.fileChangeSeen) {
     console.log("\n[file_change] One or more repository edits were executed.");
     return {
-      mergedPullRequest,
+      mergedPullRequest: facts.mergedPullRequest,
       summary: {
         inspectedAreas: [...inspectedAreas],
         editedFiles: [...editedFiles],
         validationCommands,
         failedValidationCommands,
         reviewOutcome: summarizeReviewOutcome(validationCommands),
-        pullRequestCreated,
+        pullRequestCreated: facts.pullRequestCreated,
         externalRepositories: [...externalRepositories],
         externalPullRequests: [...externalPullRequests],
-        mergedExternalPullRequest,
+        mergedExternalPullRequest: facts.mergedExternalPullRequest,
         finalResponse,
       },
     };
@@ -385,17 +561,17 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
   }
 
   return {
-    mergedPullRequest,
+    mergedPullRequest: facts.mergedPullRequest,
     summary: {
       inspectedAreas: [...inspectedAreas],
       editedFiles: [...editedFiles],
       validationCommands,
       failedValidationCommands,
       reviewOutcome: summarizeReviewOutcome(validationCommands),
-      pullRequestCreated,
+      pullRequestCreated: facts.pullRequestCreated,
       externalRepositories: [...externalRepositories],
       externalPullRequests: [...externalPullRequests],
-      mergedExternalPullRequest,
+      mergedExternalPullRequest: facts.mergedExternalPullRequest,
       finalResponse,
     },
   };
