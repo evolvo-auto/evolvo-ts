@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -447,6 +447,56 @@ describe("operatorControl", () => {
           content: "<@operator-1> Queue-drain shutdown requested.\nEvolvo will finish the current actionable queue, will not plan or create new work, and will stop once the queue is drained.",
         }),
       }),
+    );
+  });
+
+  it("replays unread control backlog when the persisted cursor file is malformed", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await gracefulShutdown.writeDiscordControlCursor(workDir, null);
+    await writeFile(gracefulShutdown.getDiscordControlCursorPath(workDir), "{not-json", "utf8");
+
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            createDiscordControlMessage(7060, "noise"),
+            createDiscordControlMessage(7061, "/quit", "operator-1"),
+          ]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-recovered-cursor" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const request = await pollDiscordGracefulShutdownCommand(workDir);
+
+    expect(request).toEqual({
+      version: 1,
+      source: "discord",
+      command: "/quit",
+      mode: "after-current-task",
+      messageId: "7061",
+      requestedAt: expect.any(String),
+    });
+    expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("7061");
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      1,
+      "https://discord.com/api/v10/channels/channel-1/messages?limit=50",
+      expect.any(Object),
+    );
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      "https://discord.com/api/v10/channels/channel-1/messages?limit=1",
+      expect.anything(),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Recovered malformed discord control cursor state store"),
     );
   });
 

@@ -1,7 +1,7 @@
 import {
   recordDiscordControlCommandReceipt,
   recordGracefulShutdownRequest,
-  readDiscordControlCursor,
+  readDiscordControlCursorState,
   type GracefulShutdownMode,
   type GracefulShutdownRequest,
   writeDiscordControlCursor,
@@ -436,9 +436,9 @@ async function initializeDiscordControlCursor(
   config: DiscordControlConfig,
   workDir: string,
 ): Promise<string | null> {
-  const existingCursor = await readDiscordControlCursor(workDir);
-  if (existingCursor !== null) {
-    return existingCursor;
+  const existingCursor = await readDiscordControlCursorState(workDir);
+  if (existingCursor.lastSeenMessageId !== null || existingCursor.recoveredMalformed) {
+    return existingCursor.lastSeenMessageId;
   }
 
   const messages = await fetchControlChannelMessages(config, { limit: 1 });
