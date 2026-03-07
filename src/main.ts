@@ -37,12 +37,15 @@ import { persistChallengeAttemptArtifact } from "./challenges/challengeAttemptAr
 import type { CodingAgentRunResult, CommandExecutionSummary } from "./agents/runCodingAgent.js";
 
 export const DEFAULT_PROMPT = "No open issues available. Create an issue first.";
-const MAX_ISSUE_CYCLES = 25;
+const MAX_ISSUE_CYCLES = 100;
 const OUTDATED_LABELS = new Set(["outdated", "obsolete", "wontfix", "invalid", "duplicate"]);
 const MIN_REPLENISH_ISSUES = 3;
 const MAX_OPEN_ISSUES = 5;
 const CHALLENGE_MAX_ATTEMPTS = 3;
 const CHALLENGE_RETRY_COOLDOWN_MS = 60 * 60 * 1000;
+const RUN_LOOP_GITHUB_MAX_RETRIES = 2;
+const RUN_LOOP_GITHUB_RETRY_BASE_DELAY_MS = 50;
+const RUN_LOOP_TRANSIENT_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
 function selectIssueForWork(issues: IssueSummary[]): IssueSummary | null {
   const notCompleted = issues.filter((issue) => !hasIssueLabel(issue, "completed"));
@@ -521,6 +524,28 @@ function logGitHubFallback(error: unknown): void {
   console.error("GitHub issue sync unavailable due to an unknown error.");
 }
 
+function isTransientGitHubError(error: unknown): boolean {
+  if (error instanceof GitHubApiError) {
+    return RUN_LOOP_TRANSIENT_STATUS_CODES.has(error.status);
+  }
+
+  if (error instanceof Error) {
+    if (error.message.startsWith("GitHub API request timed out")) {
+      return true;
+    }
+
+    return error instanceof TypeError;
+  }
+
+  return false;
+}
+
+async function waitForRunLoopRetry(delayMs: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
 export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const issueCommandHandled = await runIssueCommand(args);
@@ -534,130 +559,146 @@ export async function main(): Promise<void> {
   console.log(`Hello from ${GITHUB_OWNER}/${GITHUB_REPO}!`);
   console.log(`Working directory: ${WORK_DIR}`);
 
-  for (let cycle = 1; cycle <= MAX_ISSUE_CYCLES; cycle += 1) {
-    try {
-      const openIssues = await issueManager.listOpenIssues();
-      const actionableIssues: IssueSummary[] = [];
+  issueCycleLoop: for (let cycle = 1; cycle <= MAX_ISSUE_CYCLES; cycle += 1) {
+    let retryAttempt = 0;
+    while (true) {
+      try {
+        const openIssues = await issueManager.listOpenIssues();
+        const actionableIssues: IssueSummary[] = [];
 
-      for (const issue of openIssues) {
-        if (!isOutdatedIssue(issue)) {
-          actionableIssues.push(issue);
-          continue;
+        for (const issue of openIssues) {
+          if (!isOutdatedIssue(issue)) {
+            actionableIssues.push(issue);
+            continue;
+          }
+
+          const result = await issueManager.closeIssue(issue.number);
+          if (result.ok) {
+            console.log(`Closed outdated issue ${formatIssueForLog(issue)}.`);
+          } else {
+            console.error(`Could not close outdated issue #${issue.number}: ${result.message}`);
+          }
         }
 
-        const result = await issueManager.closeIssue(issue.number);
-        if (result.ok) {
-          console.log(`Closed outdated issue ${formatIssueForLog(issue)}.`);
-        } else {
-          console.error(`Could not close outdated issue #${issue.number}: ${result.message}`);
+        const retryEligibleIssues = await applyChallengeRetryGate(issueManager, actionableIssues, actionableIssues);
+        const selectedIssue = selectIssueForWork(retryEligibleIssues);
+
+        if (!selectedIssue) {
+          const isStartupBootstrap = cycle === 1 && openIssues.length === 0;
+          const createdIssues = isStartupBootstrap
+            ? await bootstrapStartupIssues(issueManager)
+            : (
+                await issueManager.replenishSelfImprovementIssues({
+                  minimumIssueCount: MIN_REPLENISH_ISSUES,
+                  maximumOpenIssues: MAX_OPEN_ISSUES,
+                })
+              ).created;
+          const queueActionOutcome = `${isStartupBootstrap ? "bootstrap" : "replenish"}:${createdIssues.length}`;
+          logCycleQueueHealth({
+            cycle,
+            openCount: openIssues.length,
+            selectedIssue: null,
+            queueActionOutcome,
+          });
+
+          if (createdIssues.length > 0) {
+            if (isStartupBootstrap) {
+              console.log("No open issues found on startup. Bootstrapped issue queue from repository analysis.");
+            }
+            logCreatedIssues(createdIssues);
+            continue issueCycleLoop;
+          }
+
+          if (cycle === 1) {
+            console.log(DEFAULT_PROMPT);
+          } else {
+            console.log("No actionable open issues remaining and no new issues were created. Issue loop stopped.");
+          }
+          return;
         }
-      }
 
-      const retryEligibleIssues = await applyChallengeRetryGate(issueManager, actionableIssues, actionableIssues);
-      const selectedIssue = selectIssueForWork(retryEligibleIssues);
-
-      if (!selectedIssue) {
-        const isStartupBootstrap = cycle === 1 && openIssues.length === 0;
-        const createdIssues = isStartupBootstrap
-          ? await bootstrapStartupIssues(issueManager)
-          : (
-              await issueManager.replenishSelfImprovementIssues({
-                minimumIssueCount: MIN_REPLENISH_ISSUES,
-                maximumOpenIssues: MAX_OPEN_ISSUES,
-              })
-            ).created;
-        const queueActionOutcome = `${isStartupBootstrap ? "bootstrap" : "replenish"}:${createdIssues.length}`;
         logCycleQueueHealth({
           cycle,
           openCount: openIssues.length,
-          selectedIssue: null,
-          queueActionOutcome,
+          selectedIssue,
         });
 
-        if (createdIssues.length > 0) {
-          if (isStartupBootstrap) {
-            console.log("No open issues found on startup. Bootstrapped issue queue from repository analysis.");
+        if (!hasIssueLabel(selectedIssue, "in progress")) {
+          const result = await issueManager.markInProgress(selectedIssue.number);
+          if (!result.ok) {
+            console.error(`Could not mark issue #${selectedIssue.number} as in progress: ${result.message}`);
           }
-          logCreatedIssues(createdIssues);
+        }
+
+        await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueStartComment(selectedIssue));
+
+        const prompt = buildPromptFromIssue(selectedIssue);
+        console.log(`Prompt: ${prompt}`);
+
+        let runError: unknown = null;
+        const runResult = await runCodingAgent(prompt).catch((error) => {
+          runError = error;
+          console.error("Error running the coding agent:", error);
+          return null;
+        });
+
+        if (runError) {
+          const challengeEvidence = await persistChallengeAttemptEvidence(selectedIssue, runError, runResult);
+          await updateChallengeMetrics(issueManager, selectedIssue, runError, runResult);
+          await addIssueLifecycleComment(
+            issueManager,
+            selectedIssue.number,
+            buildIssueFailureComment(selectedIssue, runError, challengeEvidence),
+          );
+          continue issueCycleLoop;
+        }
+
+        if (runResult) {
+          const challengeEvidence = await persistChallengeAttemptEvidence(selectedIssue, runError, runResult);
+          await updateChallengeMetrics(issueManager, selectedIssue, runError, runResult);
+          await addIssueLifecycleComment(
+            issueManager,
+            selectedIssue.number,
+            buildIssueExecutionComment(selectedIssue, runResult, challengeEvidence),
+          );
+        }
+
+        if (runResult?.mergedPullRequest) {
+          await addIssueLifecycleComment(issueManager, selectedIssue.number, buildMergeOutcomeComment(selectedIssue));
+          console.log("Merged pull request detected. Running post-merge restart workflow.");
+          try {
+            await runPostMergeSelfRestart(WORK_DIR);
+            console.log("Post-merge restart workflow completed. Exiting current runtime.");
+          } catch (error) {
+            if (error instanceof Error) {
+              console.error(error.message);
+            } else {
+              console.error("Post-merge restart failed with an unknown error.");
+            }
+          }
+
+          return;
+        }
+
+        break;
+      } catch (error) {
+        if (isTransientGitHubError(error) && retryAttempt < RUN_LOOP_GITHUB_MAX_RETRIES) {
+          retryAttempt += 1;
+          const delayMs = RUN_LOOP_GITHUB_RETRY_BASE_DELAY_MS * retryAttempt;
+          const message = error instanceof Error ? error.message : "unknown error";
+          console.error(
+            `Transient GitHub issue sync failure on cycle ${cycle} (attempt ${retryAttempt}/${RUN_LOOP_GITHUB_MAX_RETRIES}). Retrying in ${delayMs}ms. Error: ${message}`,
+          );
+          await waitForRunLoopRetry(delayMs);
           continue;
         }
 
+        logGitHubFallback(error);
         if (cycle === 1) {
           console.log(DEFAULT_PROMPT);
-        } else {
-          console.log("No actionable open issues remaining and no new issues were created. Issue loop stopped.");
         }
         return;
       }
-
-      logCycleQueueHealth({
-        cycle,
-        openCount: openIssues.length,
-        selectedIssue,
-      });
-
-      if (!hasIssueLabel(selectedIssue, "in progress")) {
-        const result = await issueManager.markInProgress(selectedIssue.number);
-        if (!result.ok) {
-          console.error(`Could not mark issue #${selectedIssue.number} as in progress: ${result.message}`);
-        }
-      }
-
-      await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueStartComment(selectedIssue));
-
-      const prompt = buildPromptFromIssue(selectedIssue);
-      console.log(`Prompt: ${prompt}`);
-
-      let runError: unknown = null;
-      const runResult = await runCodingAgent(prompt).catch((error) => {
-        runError = error;
-        console.error("Error running the coding agent:", error);
-        return null;
-      });
-
-      if (runError) {
-        const challengeEvidence = await persistChallengeAttemptEvidence(selectedIssue, runError, runResult);
-        await updateChallengeMetrics(issueManager, selectedIssue, runError, runResult);
-        await addIssueLifecycleComment(
-          issueManager,
-          selectedIssue.number,
-          buildIssueFailureComment(selectedIssue, runError, challengeEvidence),
-        );
-        continue;
-      }
-
-      if (runResult) {
-        const challengeEvidence = await persistChallengeAttemptEvidence(selectedIssue, runError, runResult);
-        await updateChallengeMetrics(issueManager, selectedIssue, runError, runResult);
-        await addIssueLifecycleComment(
-          issueManager,
-          selectedIssue.number,
-          buildIssueExecutionComment(selectedIssue, runResult, challengeEvidence),
-        );
-      }
-
-      if (runResult?.mergedPullRequest) {
-        await addIssueLifecycleComment(issueManager, selectedIssue.number, buildMergeOutcomeComment(selectedIssue));
-        console.log("Merged pull request detected. Running post-merge restart workflow.");
-        try {
-          await runPostMergeSelfRestart(WORK_DIR);
-          console.log("Post-merge restart workflow completed. Exiting current runtime.");
-        } catch (error) {
-          if (error instanceof Error) {
-            console.error(error.message);
-          } else {
-            console.error("Post-merge restart failed with an unknown error.");
-          }
-        }
-
-        return;
-      }
-    } catch (error) {
-      logGitHubFallback(error);
-      if (cycle === 1) {
-        console.log(DEFAULT_PROMPT);
-      }
-      return;
     }
   }
 

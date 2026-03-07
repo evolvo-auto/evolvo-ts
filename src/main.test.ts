@@ -585,6 +585,48 @@ describe("main", () => {
     expect(runCodingAgentMock).not.toHaveBeenCalled();
   });
 
+  it("retries transient GitHub API failures in the run loop and recovers", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockRejectedValueOnce(new GitHubApiError("GitHub API request failed (503): Service Unavailable", 503, null))
+      .mockResolvedValueOnce([
+        { number: 58, title: "Recover after retry", description: "retry once", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(listOpenIssuesMock).toHaveBeenCalledTimes(3);
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #58: Recover after retry\n\nretry once");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("Transient GitHub issue sync failure on cycle 1 (attempt 1/2). Retrying in 50ms."),
+    );
+  });
+
+  it("stops after bounded retries when transient GitHub API failures persist", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock.mockRejectedValue(
+      new GitHubApiError("GitHub API request failed (503): Service Unavailable", 503, null),
+    );
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(listOpenIssuesMock).toHaveBeenCalledTimes(3);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("Transient GitHub issue sync failure on cycle 1 (attempt 1/2). Retrying in 50ms."),
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("Transient GitHub issue sync failure on cycle 1 (attempt 2/2). Retrying in 100ms."),
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      "GitHub issue sync unavailable: GitHub API request failed (503): Service Unavailable",
+    );
+    expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(runCodingAgentMock).not.toHaveBeenCalled();
+  });
+
   it("adds a lifecycle issue comment when agent execution fails", async () => {
     listOpenIssuesMock
       .mockResolvedValueOnce([
