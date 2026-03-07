@@ -89,7 +89,7 @@ function uniqueByTitle(templates: IssueTemplate[]): IssueTemplate[] {
 
 export async function generateStartupIssueTemplates(
   repoRoot: string,
-  options: { targetCount: number } = { targetCount: 3 },
+  options: { targetCount: number; fallbackTemplates?: IssueTemplate[] } = { targetCount: 3 },
 ): Promise<IssueTemplate[]> {
   const targetCount = Math.max(0, Math.floor(options.targetCount));
   if (targetCount === 0) {
@@ -155,6 +155,10 @@ export async function generateStartupIssueTemplates(
     }
   }
 
-  const combined = uniqueByTitle([...templates, ...FALLBACK_TEMPLATES]);
+  const fallbackTemplates =
+    options.fallbackTemplates && options.fallbackTemplates.length > 0
+      ? options.fallbackTemplates
+      : FALLBACK_TEMPLATES;
+  const combined = uniqueByTitle([...templates, ...fallbackTemplates]);
   return combined.slice(0, targetCount);
 }
