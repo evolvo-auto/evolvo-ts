@@ -1,11 +1,12 @@
 import { Codex, Thread, type ThreadItem } from "@openai/codex-sdk";
 import {
-  CODING_AGENT_THREAD_OPTIONS,
+  buildCodingAgentThreadOptions,
   buildCodingPrompt,
 } from "./codingAgent.js";
+import { WORK_DIR } from "../constants/workDir.js";
 
 const codex = new Codex();
-let activeThread: Thread | null = null;
+const activeThreads = new Map<string, Thread>();
 const GITHUB_REPOSITORY_URL_PATTERN = /https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:\.git)?(?:\/)?/gi;
 const GITHUB_PULL_REQUEST_URL_PATTERN = /https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/\d+/gi;
 const INSPECTION_COMMAND_NAMES = new Set(["rg", "grep", "cat", "sed", "ls", "find", "fd", "tree"]);
@@ -63,12 +64,55 @@ type RuntimeFacts = {
   pullRequestCreated: boolean;
 };
 
-function getThread(): Thread {
-  if (!activeThread) {
-    activeThread = codex.startThread(CODING_AGENT_THREAD_OPTIONS);
+export type CodingAgentExecutionContext = {
+  workDir: string;
+  internalRepositoryUrls: string[];
+};
+
+let currentExecutionContext: CodingAgentExecutionContext | null = null;
+
+function normalizeInternalRepositoryUrls(urls: string[]): string[] {
+  const normalizedUrls = urls
+    .map((url) => normalizeRepositoryUrl(url))
+    .filter((url) => url.length > 0);
+  return [...new Set(normalizedUrls)];
+}
+
+function getDefaultExecutionContext(): CodingAgentExecutionContext {
+  const configuredRepositoryUrl = getConfiguredRepositoryUrl();
+  return {
+    workDir: WORK_DIR,
+    internalRepositoryUrls: configuredRepositoryUrl ? [configuredRepositoryUrl] : [],
+  };
+}
+
+export function configureCodingAgentExecutionContext(context: CodingAgentExecutionContext): void {
+  currentExecutionContext = {
+    workDir: context.workDir,
+    internalRepositoryUrls: normalizeInternalRepositoryUrls(context.internalRepositoryUrls),
+  };
+}
+
+function getExecutionContext(): CodingAgentExecutionContext {
+  if (currentExecutionContext === null) {
+    return getDefaultExecutionContext();
   }
 
-  return activeThread;
+  return {
+    workDir: currentExecutionContext.workDir,
+    internalRepositoryUrls: normalizeInternalRepositoryUrls(currentExecutionContext.internalRepositoryUrls),
+  };
+}
+
+function getThread(workDir: string): Thread {
+  const existingThread = activeThreads.get(workDir);
+  if (existingThread) {
+    return existingThread;
+  }
+
+  const nextThread = codex.startThread(buildCodingAgentThreadOptions(workDir));
+  activeThreads.set(workDir, nextThread);
+  return nextThread;
 }
 
 function isFileEditRequest(prompt: string): boolean {
@@ -312,12 +356,13 @@ function getConfiguredRepositoryUrl(): string | null {
   return `https://github.com/${owner}/${repo}`;
 }
 
-function isExternalRepositoryUrl(url: string, configuredRepositoryUrl: string | null): boolean {
-  if (!configuredRepositoryUrl) {
+function isExternalRepositoryUrl(url: string, internalRepositoryUrls: string[]): boolean {
+  if (internalRepositoryUrls.length === 0) {
     return true;
   }
 
-  return normalizeRepositoryUrl(url).toLowerCase() !== normalizeRepositoryUrl(configuredRepositoryUrl).toLowerCase();
+  const normalizedUrl = normalizeRepositoryUrl(url).toLowerCase();
+  return !internalRepositoryUrls.some((internalRepositoryUrl) => normalizeRepositoryUrl(internalRepositoryUrl).toLowerCase() === normalizedUrl);
 }
 
 function logCompletedItem(item: ThreadItem, details?: CommandExecutionLogDetails): void {
@@ -372,7 +417,8 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
   console.log("=== Run starting ===");
   console.log(`[user] ${prompt}\n`);
 
-  const thread = getThread();
+  const executionContext = getExecutionContext();
+  const thread = getThread(executionContext.workDir);
   const { events } = await thread.runStreamed(buildCodingPrompt(prompt));
 
   const startedItems = new Set<string>();
@@ -391,18 +437,18 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
     pullRequestCreated: false,
   };
   let finalResponse = "";
-  const configuredRepositoryUrl = getConfiguredRepositoryUrl();
+  const internalRepositoryUrls = executionContext.internalRepositoryUrls;
 
   function captureExternalReferences(text: string): void {
     for (const repositoryUrl of extractGitHubRepositoryUrls(text)) {
-      if (isExternalRepositoryUrl(repositoryUrl, configuredRepositoryUrl)) {
+      if (isExternalRepositoryUrl(repositoryUrl, internalRepositoryUrls)) {
         externalRepositories.add(repositoryUrl);
       }
     }
 
     for (const pullRequestUrl of extractGitHubPullRequestUrls(text)) {
       const pullRequestRepositoryUrl = pullRequestUrl.replace(/\/pull\/\d+$/, "");
-      if (isExternalRepositoryUrl(pullRequestRepositoryUrl, configuredRepositoryUrl)) {
+      if (isExternalRepositoryUrl(pullRequestRepositoryUrl, internalRepositoryUrls)) {
         externalPullRequests.add(pullRequestUrl);
         externalRepositories.add(pullRequestRepositoryUrl);
       }
@@ -453,7 +499,7 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
         captureExternalReferences(event.item.aggregated_output);
 
         for (const repositoryUrl of extractGhRepoFlagUrls(contract.parsedCommand.args)) {
-          if (isExternalRepositoryUrl(repositoryUrl, configuredRepositoryUrl)) {
+          if (isExternalRepositoryUrl(repositoryUrl, internalRepositoryUrls)) {
             externalRepositories.add(repositoryUrl);
           }
         }
@@ -468,7 +514,7 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
           const mergedPullRequestUrls = extractGitHubPullRequestUrls(mergeText);
           const mergedExternal = mergedPullRequestUrls.some((pullRequestUrl) => {
             const pullRequestRepositoryUrl = pullRequestUrl.replace(/\/pull\/\d+$/, "");
-            return isExternalRepositoryUrl(pullRequestRepositoryUrl, configuredRepositoryUrl);
+            return isExternalRepositoryUrl(pullRequestRepositoryUrl, internalRepositoryUrls);
           });
 
           const mergedRepositoryUrls = [
@@ -476,7 +522,7 @@ export async function runCodingAgent(prompt: string): Promise<CodingAgentRunResu
             ...extractGitHubRepositoryUrls(mergeText),
           ];
           const mergedExternalRepository = mergedRepositoryUrls.some((repositoryUrl) =>
-            isExternalRepositoryUrl(repositoryUrl, configuredRepositoryUrl)
+            isExternalRepositoryUrl(repositoryUrl, internalRepositoryUrls)
           );
 
           if (mergedExternal || mergedExternalRepository) {

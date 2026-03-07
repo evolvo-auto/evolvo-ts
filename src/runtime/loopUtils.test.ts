@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GitHubApiError } from "../github/githubClient.js";
-import { getRunLoopRetryDelayMs, isTransientGitHubError, waitForRunLoopRetry } from "./loopUtils.js";
+import { getRunLoopRetryDelayMs, isTransientGitHubError, selectIssueForWork, waitForRunLoopRetry } from "./loopUtils.js";
 
 describe("loopUtils retry handling", () => {
   afterEach(() => {
@@ -61,5 +61,26 @@ describe("loopUtils retry handling", () => {
     await vi.advanceTimersByTimeAsync(1);
     await retryPromise;
     expect(resolved).toBe(true);
+  });
+
+  it("skips generically blocked issues when selecting work", () => {
+    const selected = selectIssueForWork([
+      {
+        number: 1,
+        title: "Blocked project issue",
+        description: "blocked",
+        state: "open",
+        labels: ["blocked"],
+      },
+      {
+        number: 2,
+        title: "Ready issue",
+        description: "ready",
+        state: "open",
+        labels: [],
+      },
+    ]);
+
+    expect(selected?.number).toBe(2);
   });
 });

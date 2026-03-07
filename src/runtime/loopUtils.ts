@@ -18,7 +18,7 @@ const RUN_LOOP_GITHUB_RETRY_MAX_DELAY_MS = 1_000;
 export const DEFAULT_PROMPT = "No open issues available. Create an issue first.";
 
 export function selectIssueForWork(issues: IssueSummary[]): IssueSummary | null {
-  const notCompleted = issues.filter((issue) => !hasIssueLabel(issue, "completed"));
+  const notCompleted = issues.filter((issue) => !hasIssueLabel(issue, "completed") && !hasIssueLabel(issue, "blocked"));
   if (notCompleted.length === 0) {
     return null;
   }

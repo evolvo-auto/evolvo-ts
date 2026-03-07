@@ -2,6 +2,7 @@ import type { CodingAgentRunResult, CommandExecutionSummary } from "../agents/ru
 import { persistChallengeAttemptArtifact } from "../challenges/challengeAttemptArtifacts.js";
 import { isChallengeIssue } from "../issues/challengeIssue.js";
 import type { TaskIssueManager, IssueSummary } from "../issues/taskIssueManager.js";
+import type { ProjectExecutionContext } from "../projects/projectExecutionContext.js";
 import { describeRepositoryDefaultBranch } from "./defaultBranch.js";
 
 export type ChallengeAttemptEvidence = {
@@ -11,6 +12,21 @@ export type ChallengeAttemptEvidence = {
   reviewOutcome: string | null;
   runtimeErrorMessage: string | null;
 };
+
+function buildProjectContextLines(executionContext: ProjectExecutionContext | null | undefined): string[] {
+  if (!executionContext) {
+    return [];
+  }
+
+  return [
+    "",
+    "### Project Context",
+    `- Project: ${executionContext.project.displayName} (\`${executionContext.project.slug}\`).`,
+    `- Tracker repository: \`${executionContext.trackerRepository}\`.`,
+    `- Execution repository: \`${executionContext.executionRepository}\`.`,
+    `- Working directory: \`${executionContext.project.cwd}\`.`,
+  ];
+}
 
 function formatDuration(durationMs: number | null): string {
   if (durationMs === null || !Number.isFinite(durationMs) || durationMs < 0) {
@@ -80,12 +96,16 @@ function formatFinalResponseExcerpt(response: string): string {
   return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
-export function buildIssueStartComment(issue: IssueSummary): string {
+export function buildIssueStartComment(
+  issue: IssueSummary,
+  executionContext: ProjectExecutionContext | null = null,
+): string {
   return [
     "## Task Start",
     `- Started work on issue #${issue.number}: ${issue.title}.`,
     "- Initial assessment: inspect related files, apply a focused implementation, then validate and review.",
     "- Planned lifecycle logging: inspection, implementation decisions, validation steps/results, review outcome, PR/merge status, completion summary.",
+    ...buildProjectContextLines(executionContext),
   ].join("\n");
 }
 
@@ -155,6 +175,7 @@ export function buildIssueExecutionComment(
   result: CodingAgentRunResult,
   challengeEvidence: ChallengeAttemptEvidence | null,
   defaultBranch: string | null = null,
+  executionContext: ProjectExecutionContext | null = null,
 ): string {
   const inspectedAreas = result.summary.inspectedAreas.length > 0
     ? result.summary.inspectedAreas.map((area) => `- \`${area}\``)
@@ -177,9 +198,11 @@ export function buildIssueExecutionComment(
     : ["- No external pull request link captured."];
   const externalMergeLine = `- External pull request merged: ${result.summary.mergedExternalPullRequest ? "yes" : "no"}.`;
   const challengeEvidenceLines = isChallengeIssue(issue) ? buildChallengeEvidenceCommentLines(challengeEvidence) : [];
+  const projectContextLines = buildProjectContextLines(executionContext);
 
   return [
     "## Task Execution Log",
+    ...projectContextLines,
     "",
     "### Inspection",
     ...inspectedAreas,

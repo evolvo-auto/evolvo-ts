@@ -71,7 +71,9 @@ type DiscordIssueStartNotification = {
   issueNumber: number;
   issueTitle: string;
   issueUrl: string;
-  repository: string;
+  trackerRepository: string;
+  executionProject: string;
+  executionRepository: string;
   lifecycleState: string;
 };
 
@@ -243,8 +245,18 @@ async function sendIssueStartNotification(
               inline: true,
             },
             {
-              name: "Repository",
-              value: notification.repository,
+              name: "Tracker Repository",
+              value: notification.trackerRepository,
+              inline: true,
+            },
+            {
+              name: "Execution Project",
+              value: notification.executionProject,
+              inline: true,
+            },
+            {
+              name: "Execution Repository",
+              value: notification.executionRepository,
               inline: true,
             },
           ],

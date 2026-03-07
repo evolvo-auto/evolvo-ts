@@ -13,6 +13,7 @@ vi.mock("@openai/codex-sdk", () => ({
 
 vi.mock("./codingAgent.js", () => ({
   CODING_AGENT_THREAD_OPTIONS: { sandboxMode: "workspace-write" },
+  buildCodingAgentThreadOptions: (workDir: string) => ({ sandboxMode: "workspace-write", workingDirectory: workDir }),
   buildCodingPrompt: buildCodingPromptMock,
 }));
 
@@ -421,6 +422,49 @@ describe("runCodingAgent", () => {
     expect(result.mergedPullRequest).toBe(true);
     expect(result.summary.mergedExternalPullRequest).toBe(true);
     expect(result.summary.externalRepositories).toContain("https://github.com/other-org/other-repo");
+  });
+
+  it("uses the resolved project workdir and treats the active project repository as internal", async () => {
+    startThreadMock.mockReturnValue({ runStreamed: runStreamedMock });
+    runStreamedMock.mockResolvedValue(createEventStream([
+      {
+        type: "item.completed",
+        item: {
+          id: "1",
+          type: "command_execution",
+          command: "gh pr create --repo evolvo-auto/habit-cli --title \"project\" --body \"project\"",
+          exit_code: 0,
+          aggregated_output: "https://github.com/evolvo-auto/habit-cli/pull/7",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "2",
+          type: "file_change",
+          status: "completed",
+          changes: [{ kind: "add", path: "notes.md" }],
+        },
+      },
+    ]));
+
+    const { configureCodingAgentExecutionContext, runCodingAgent } = await import("./runCodingAgent.js");
+    configureCodingAgentExecutionContext({
+      workDir: "/tmp/evolvo/projects/habit-cli",
+      internalRepositoryUrls: [
+        "https://github.com/evolvo-auto/evolvo-ts",
+        "https://github.com/evolvo-auto/habit-cli",
+      ],
+    });
+    const result = await runCodingAgent("Create managed project pull request");
+
+    expect(startThreadMock).toHaveBeenCalledWith({
+      sandboxMode: "workspace-write",
+      workingDirectory: "/tmp/evolvo/projects/habit-cli",
+    });
+    expect(result.summary.externalRepositories).toEqual([]);
+    expect(result.summary.externalPullRequests).toEqual([]);
+    expect(result.summary.mergedExternalPullRequest).toBe(false);
   });
 
   it("does not treat arbitrary command text as validation execution", async () => {

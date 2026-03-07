@@ -59,7 +59,9 @@ describe("operatorControl", () => {
       issueNumber: 298,
       issueTitle: "Send Discord start embed",
       issueUrl: "https://github.com/evolvo-auto/evolvo-ts/issues/298",
-      repository: "evolvo-auto/evolvo-ts",
+      trackerRepository: "evolvo-auto/evolvo-ts",
+      executionProject: "Evolvo (`evolvo`)",
+      executionRepository: "evolvo-auto/evolvo-ts",
       lifecycleState: "selected -> executing",
     });
 
@@ -170,7 +172,9 @@ describe("operatorControl", () => {
       issueNumber: 298,
       issueTitle: "Send a Discord embed notification with GitHub issue link when starting a new issue",
       issueUrl: "https://github.com/evolvo-auto/evolvo-ts/issues/298",
-      repository: "evolvo-auto/evolvo-ts",
+      trackerRepository: "evolvo-auto/evolvo-ts",
+      executionProject: "Evolvo (`evolvo`)",
+      executionRepository: "evolvo-auto/evolvo-ts",
       lifecycleState: "selected -> executing",
     });
 
@@ -203,7 +207,17 @@ describe("operatorControl", () => {
                   inline: true,
                 },
                 {
-                  name: "Repository",
+                  name: "Tracker Repository",
+                  value: "evolvo-auto/evolvo-ts",
+                  inline: true,
+                },
+                {
+                  name: "Execution Project",
+                  value: "Evolvo (`evolvo`)",
+                  inline: true,
+                },
+                {
+                  name: "Execution Repository",
                   value: "evolvo-auto/evolvo-ts",
                   inline: true,
                 },
@@ -251,7 +265,9 @@ describe("operatorControl", () => {
       issueNumber: 298,
       issueTitle: "Send Discord start embed",
       issueUrl: "https://github.com/evolvo-auto/evolvo-ts/issues/298",
-      repository: "evolvo-auto/evolvo-ts",
+      trackerRepository: "evolvo-auto/evolvo-ts",
+      executionProject: "Evolvo (`evolvo`)",
+      executionRepository: "evolvo-auto/evolvo-ts",
       lifecycleState: "selected -> executing",
     });
 

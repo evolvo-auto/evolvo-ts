@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { pathToFileURL } from "node:url";
 import type { CodingAgentRunResult } from "./agents/runCodingAgent.js";
-import { runCodingAgent } from "./agents/runCodingAgent.js";
+import { configureCodingAgentExecutionContext, runCodingAgent } from "./agents/runCodingAgent.js";
 import { runPlannerAgent } from "./agents/plannerAgent.js";
 import { WORK_DIR } from "./constants/workDir.js";
 import { GitHubAdminClient } from "./github/githubAdminClient.js";
@@ -67,6 +67,16 @@ import {
   executeProjectProvisioningIssue,
   isProjectProvisioningRequestIssue,
 } from "./projects/projectProvisioning.js";
+import {
+  PROJECT_ROUTING_BLOCKED_LABEL,
+  buildProjectRoutingBlockedComment,
+  resolveProjectExecutionContextForIssue,
+  type ProjectExecutionContext,
+} from "./projects/projectExecutionContext.js";
+import {
+  buildDefaultProjectContext,
+  ensureProjectRegistry,
+} from "./projects/projectRegistry.js";
 
 const MAX_ISSUE_CYCLES = 5;
 const MIN_REPLENISH_ISSUES = 3;
@@ -106,6 +116,10 @@ function mapReviewOutcomeToLifecycleState(reviewOutcome: string): "accepted" | "
   }
 
   return "rejected";
+}
+
+function buildExecutionProjectDisplay(context: ProjectExecutionContext): string {
+  return `${context.project.displayName} (\`${context.project.slug}\`)`;
 }
 
 async function transitionIssueLifecycleState(
@@ -230,6 +244,11 @@ export async function main(): Promise<void> {
   const issueManager = new TaskIssueManager(githubClient);
   const adminClient = new GitHubAdminClient(githubClient, githubConfig);
   const repositoryName = `${GITHUB_OWNER}/${GITHUB_REPO}`;
+  const defaultProjectContext = buildDefaultProjectContext({
+    owner: GITHUB_OWNER,
+    repo: GITHUB_REPO,
+    workDir: WORK_DIR,
+  });
   const discordHandlers: DiscordControlHandlers = {
     onStartProject: async (request) =>
       createProjectProvisioningRequestIssue({
@@ -245,6 +264,7 @@ export async function main(): Promise<void> {
 
   console.log(`Hello from ${GITHUB_OWNER}/${GITHUB_REPO}!`);
   console.log(`Working directory: ${WORK_DIR}`);
+  await ensureProjectRegistry(WORK_DIR, defaultProjectContext);
   await signalRestartReadinessIfRequested(WORK_DIR);
   await runDiscordOperatorControlStartupCheck();
   const gracefulShutdownListener = await startDiscordGracefulShutdownListener(WORK_DIR, discordHandlers);
@@ -382,6 +402,32 @@ export async function main(): Promise<void> {
             openCount: openIssues.length,
             selectedIssue,
           });
+          const projectResolution = await resolveProjectExecutionContextForIssue({
+            issue: selectedIssue,
+            workDir: WORK_DIR,
+            defaultProject: defaultProjectContext,
+          });
+          if (!projectResolution.ok) {
+            const routingComment = buildProjectRoutingBlockedComment(selectedIssue, projectResolution);
+            await addIssueLifecycleComment(issueManager, selectedIssue.number, routingComment);
+            await transitionIssueLifecycleState(issueManager, {
+              issue: selectedIssue,
+              nextState: "blocked",
+              reason: `project routing blocked: ${projectResolution.message}`,
+              cycle,
+            });
+            const blockLabelResult = await issueManager.updateLabels(selectedIssue.number, {
+              add: [PROJECT_ROUTING_BLOCKED_LABEL],
+              remove: ["in progress"],
+            });
+            if (!blockLabelResult.ok) {
+              console.error(`Could not block issue #${selectedIssue.number} for invalid project routing: ${blockLabelResult.message}`);
+              continue issueCycleLoop;
+            }
+            continue;
+          }
+
+          const executionContext = projectResolution.context;
           await transitionIssueLifecycleState(issueManager, {
             issue: selectedIssue,
             nextState: "selected",
@@ -400,12 +446,14 @@ export async function main(): Promise<void> {
           }
 
           if (startedThisCycle) {
-            await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueStartComment(selectedIssue));
+            await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueStartComment(selectedIssue, executionContext));
             await notifyIssueStartedInDiscord({
               issueNumber: selectedIssue.number,
               issueTitle: selectedIssue.title,
               issueUrl: `https://github.com/${repositoryName}/issues/${selectedIssue.number}`,
-              repository: repositoryName,
+              trackerRepository: repositoryName,
+              executionProject: buildExecutionProjectDisplay(executionContext),
+              executionRepository: executionContext.executionRepository,
               lifecycleState: "selected -> executing",
             });
           }
@@ -493,6 +541,13 @@ export async function main(): Promise<void> {
 
           const prompt = buildPromptFromIssue(selectedIssue);
           console.log(`Prompt: ${prompt}`);
+          configureCodingAgentExecutionContext({
+            workDir: executionContext.project.cwd,
+            internalRepositoryUrls: [
+              executionContext.project.trackerRepo.url,
+              executionContext.project.executionRepo.url,
+            ],
+          });
           let runError: unknown = null;
           const runResult = await runCodingAgent(prompt).catch((error) => {
             runError = error;
@@ -520,7 +575,7 @@ export async function main(): Promise<void> {
           let mergedDefaultBranch: string | null = null;
           if (runResult) {
             mergedDefaultBranch = runResult.mergedPullRequest
-              ? await tryResolveRepositoryDefaultBranch(WORK_DIR)
+              ? await tryResolveRepositoryDefaultBranch(executionContext.project.cwd)
               : null;
             await transitionIssueLifecycleState(issueManager, {
               issue: selectedIssue,
@@ -559,7 +614,7 @@ export async function main(): Promise<void> {
             await addIssueLifecycleComment(
               issueManager,
               selectedIssue.number,
-              buildIssueExecutionComment(selectedIssue, runResult, challengeEvidence, mergedDefaultBranch),
+              buildIssueExecutionComment(selectedIssue, runResult, challengeEvidence, mergedDefaultBranch, executionContext),
             );
             const challengeCompleted = await finalizeChallengeSuccess(
               issueManager,
@@ -591,26 +646,30 @@ export async function main(): Promise<void> {
               selectedIssue.number,
               buildMergeOutcomeComment(selectedIssue, mergedDefaultBranch),
             );
-            console.log("Merged pull request detected. Running post-merge restart workflow.");
-            try {
-              await runPostMergeSelfRestart(WORK_DIR);
-              await transitionIssueLifecycleState(issueManager, {
-                issue: selectedIssue,
-                nextState: "restarted",
-                reason: "post-merge restart workflow completed successfully",
-                cycle,
-                runResult,
-              });
-              console.log("Post-merge restart workflow completed. Exiting current runtime.");
-            } catch (error) {
-              if (error instanceof Error) {
-                console.error(error.message);
-              } else {
-                console.error("Post-merge restart failed with an unknown error.");
+            if (executionContext.project.kind === "default") {
+              console.log("Merged pull request detected. Running post-merge restart workflow.");
+              try {
+                await runPostMergeSelfRestart(WORK_DIR);
+                await transitionIssueLifecycleState(issueManager, {
+                  issue: selectedIssue,
+                  nextState: "restarted",
+                  reason: "post-merge restart workflow completed successfully",
+                  cycle,
+                  runResult,
+                });
+                console.log("Post-merge restart workflow completed. Exiting current runtime.");
+              } catch (error) {
+                if (error instanceof Error) {
+                  console.error(error.message);
+                } else {
+                  console.error("Post-merge restart failed with an unknown error.");
+                }
               }
+
+              return;
             }
 
-            return;
+            console.log("Merged pull request detected for a managed project. Continuing without self-restart.");
           }
 
           if (

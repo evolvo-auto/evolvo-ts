@@ -64,20 +64,85 @@ describe("issueLifecyclePresentation", () => {
   it("builds task start comment with issue context", () => {
     const issue = createIssue({ number: 88, title: "Add tests" });
 
-    const comment = buildIssueStartComment(issue);
+    const comment = buildIssueStartComment(issue, {
+      project: {
+        slug: "habit-cli",
+        displayName: "Habit CLI",
+        kind: "managed",
+        issueLabel: "project:habit-cli",
+        trackerRepo: {
+          owner: "evolvo-auto",
+          repo: "evolvo-ts",
+          url: "https://github.com/evolvo-auto/evolvo-ts",
+        },
+        executionRepo: {
+          owner: "evolvo-auto",
+          repo: "habit-cli",
+          url: "https://github.com/evolvo-auto/habit-cli",
+          defaultBranch: "main",
+        },
+        cwd: "/tmp/evolvo/projects/habit-cli",
+        status: "active",
+        sourceIssueNumber: 318,
+        createdAt: "2026-03-07T12:00:00.000Z",
+        updatedAt: "2026-03-07T12:00:00.000Z",
+        provisioning: {
+          labelCreated: true,
+          repoCreated: true,
+          workspacePrepared: true,
+          lastError: null,
+        },
+      },
+      trackerRepository: "evolvo-auto/evolvo-ts",
+      executionRepository: "evolvo-auto/habit-cli",
+    });
 
     expect(comment).toContain("## Task Start");
     expect(comment).toContain("issue #88: Add tests");
     expect(comment).toContain("Planned lifecycle logging");
+    expect(comment).toContain("Project: Habit CLI (`habit-cli`).");
+    expect(comment).toContain("Execution repository: `evolvo-auto/habit-cli`.");
   });
 
   it("builds execution comment with validation and external evidence details", () => {
     const issue = createIssue();
     const runResult = createRunResult();
 
-    const comment = buildIssueExecutionComment(issue, runResult, null);
+    const comment = buildIssueExecutionComment(issue, runResult, null, null, {
+      project: {
+        slug: "evolvo",
+        displayName: "Evolvo",
+        kind: "default",
+        issueLabel: "project:evolvo",
+        trackerRepo: {
+          owner: "evolvo-auto",
+          repo: "evolvo-ts",
+          url: "https://github.com/evolvo-auto/evolvo-ts",
+        },
+        executionRepo: {
+          owner: "evolvo-auto",
+          repo: "evolvo-ts",
+          url: "https://github.com/evolvo-auto/evolvo-ts",
+          defaultBranch: "main",
+        },
+        cwd: "/tmp/evolvo",
+        status: "active",
+        sourceIssueNumber: null,
+        createdAt: "2026-03-07T12:00:00.000Z",
+        updatedAt: "2026-03-07T12:00:00.000Z",
+        provisioning: {
+          labelCreated: false,
+          repoCreated: true,
+          workspacePrepared: true,
+          lastError: null,
+        },
+      },
+      trackerRepository: "evolvo-auto/evolvo-ts",
+      executionRepository: "evolvo-auto/evolvo-ts",
+    });
 
     expect(comment).toContain("## Task Execution Log");
+    expect(comment).toContain("Project: Evolvo (`evolvo`).");
     expect(comment).toContain("name=pnpm");
     expect(comment).toContain("status=0");
     expect(comment).toContain("elapsed=155ms");

@@ -74,7 +74,17 @@ export function getProjectRegistryPath(workDir: string): string {
   return join(workDir, EVOLVO_DIRECTORY_NAME, PROJECT_REGISTRY_FILE_NAME);
 }
 
+export function buildDefaultProjectContext(context: DefaultProjectContext): DefaultProjectContext {
+  return {
+    owner: context.owner,
+    repo: context.repo,
+    workDir: context.workDir,
+    defaultBranch: context.defaultBranch?.trim() || null,
+  };
+}
+
 export function buildDefaultProjectRecord(context: DefaultProjectContext): ProjectRecord {
+  const normalizedContext = buildDefaultProjectContext(context);
   const createdAt = new Date().toISOString();
   return {
     slug: DEFAULT_PROJECT_SLUG,
@@ -82,17 +92,17 @@ export function buildDefaultProjectRecord(context: DefaultProjectContext): Proje
     kind: "default",
     issueLabel: buildProjectIssueLabel(DEFAULT_PROJECT_SLUG),
     trackerRepo: {
-      owner: context.owner,
-      repo: context.repo,
-      url: buildRepositoryUrl(context.owner, context.repo),
+      owner: normalizedContext.owner,
+      repo: normalizedContext.repo,
+      url: buildRepositoryUrl(normalizedContext.owner, normalizedContext.repo),
     },
     executionRepo: {
-      owner: context.owner,
-      repo: context.repo,
-      url: buildRepositoryUrl(context.owner, context.repo),
-      defaultBranch: context.defaultBranch?.trim() || null,
+      owner: normalizedContext.owner,
+      repo: normalizedContext.repo,
+      url: buildRepositoryUrl(normalizedContext.owner, normalizedContext.repo),
+      defaultBranch: normalizedContext.defaultBranch ?? null,
     },
-    cwd: context.workDir,
+    cwd: normalizedContext.workDir,
     status: "active",
     sourceIssueNumber: null,
     createdAt,
@@ -246,6 +256,15 @@ export async function writeProjectRegistry(workDir: string, registry: ProjectReg
     `${JSON.stringify({ version: PROJECT_REGISTRY_VERSION, projects: registry.projects }, null, 2)}\n`,
     "utf8",
   );
+}
+
+export async function ensureProjectRegistry(
+  workDir: string,
+  defaultProject: DefaultProjectContext,
+): Promise<ProjectRegistry> {
+  const registry = await readProjectRegistry(workDir, defaultProject);
+  await writeProjectRegistry(workDir, registry);
+  return registry;
 }
 
 export async function upsertProjectRecord(

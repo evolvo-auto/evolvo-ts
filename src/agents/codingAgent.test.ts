@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CODING_AGENT_THREAD_OPTIONS,
+  buildCodingAgentThreadOptions,
   buildCodingPrompt,
 } from "./codingAgent.js";
 
@@ -68,5 +69,14 @@ describe("buildCodingPrompt", () => {
   it("keeps Codex configured for workspace-write execution", () => {
     expect(CODING_AGENT_THREAD_OPTIONS.sandboxMode).toBe("workspace-write");
     expect(CODING_AGENT_THREAD_OPTIONS.approvalPolicy).toBe("never");
+  });
+
+  it("builds thread options for a resolved project working directory", () => {
+    const options = buildCodingAgentThreadOptions("/tmp/evolvo/projects/habit-cli");
+
+    expect(options).toEqual({
+      ...CODING_AGENT_THREAD_OPTIONS,
+      workingDirectory: "/tmp/evolvo/projects/habit-cli",
+    });
   });
 });

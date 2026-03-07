@@ -32,6 +32,10 @@ const stopDiscordGracefulShutdownListenerMock = vi.fn();
 const readGracefulShutdownRequestMock = vi.fn();
 const clearGracefulShutdownRequestMock = vi.fn();
 const tryResolveRepositoryDefaultBranchMock = vi.fn();
+const configureCodingAgentExecutionContextMock = vi.fn();
+const ensureProjectRegistryMock = vi.fn();
+const resolveProjectExecutionContextForIssueMock = vi.fn();
+const buildProjectRoutingBlockedCommentMock = vi.fn();
 const createProjectProvisioningRequestIssueMock = vi.fn();
 const executeProjectProvisioningIssueMock = vi.fn();
 const isProjectProvisioningRequestIssueMock = vi.fn();
@@ -54,6 +58,39 @@ const DEFAULT_RUN_RESULT = {
   },
 };
 
+const DEFAULT_PROJECT_EXECUTION_CONTEXT = {
+  project: {
+    slug: "evolvo",
+    displayName: "Evolvo",
+    kind: "default" as const,
+    issueLabel: "project:evolvo",
+    trackerRepo: {
+      owner: "owner",
+      repo: "repo",
+      url: "https://github.com/owner/repo",
+    },
+    executionRepo: {
+      owner: "owner",
+      repo: "repo",
+      url: "https://github.com/owner/repo",
+      defaultBranch: "main",
+    },
+    cwd: "/tmp/evolvo",
+    status: "active" as const,
+    sourceIssueNumber: null,
+    createdAt: "2026-03-07T12:00:00.000Z",
+    updatedAt: "2026-03-07T12:00:00.000Z",
+    provisioning: {
+      labelCreated: false,
+      repoCreated: true,
+      workspacePrepared: true,
+      lastError: null,
+    },
+  },
+  trackerRepository: "owner/repo",
+  executionRepository: "owner/repo",
+};
+
 vi.mock("./environment.js", () => ({
   GITHUB_OWNER: "owner",
   GITHUB_REPO: "repo",
@@ -64,6 +101,7 @@ vi.mock("./constants/workDir.js", () => ({
 }));
 
 vi.mock("./agents/runCodingAgent.js", () => ({
+  configureCodingAgentExecutionContext: configureCodingAgentExecutionContextMock,
   runCodingAgent: runCodingAgentMock,
 }));
 
@@ -134,6 +172,27 @@ vi.mock("./projects/projectProvisioning.js", () => ({
   isProjectProvisioningRequestIssue: isProjectProvisioningRequestIssueMock,
 }));
 
+vi.mock("./projects/projectRegistry.js", () => ({
+  buildDefaultProjectContext: (context: {
+    owner: string;
+    repo: string;
+    workDir: string;
+    defaultBranch?: string | null;
+  }) => ({
+    owner: context.owner,
+    repo: context.repo,
+    workDir: context.workDir,
+    defaultBranch: context.defaultBranch ?? null,
+  }),
+  ensureProjectRegistry: ensureProjectRegistryMock,
+}));
+
+vi.mock("./projects/projectExecutionContext.js", () => ({
+  PROJECT_ROUTING_BLOCKED_LABEL: "blocked",
+  buildProjectRoutingBlockedComment: buildProjectRoutingBlockedCommentMock,
+  resolveProjectExecutionContextForIssue: resolveProjectExecutionContextForIssueMock,
+}));
+
 vi.mock("./issues/runIssueCommand.js", () => ({
   runIssueCommand: runIssueCommandMock,
 }));
@@ -174,6 +233,8 @@ describe("main", () => {
     delete process.env.EVOLVO_READINESS_FILE;
     runCodingAgentMock.mockReset();
     runCodingAgentMock.mockResolvedValue(DEFAULT_RUN_RESULT);
+    configureCodingAgentExecutionContextMock.mockReset();
+    configureCodingAgentExecutionContextMock.mockImplementation(() => undefined);
     runPlannerAgentMock.mockReset();
     generateStartupIssueTemplatesMock.mockReset();
     generateStartupIssueTemplatesMock.mockResolvedValue([]);
@@ -261,6 +322,15 @@ describe("main", () => {
     buildProjectProvisioningOutcomeCommentMock.mockReturnValue("## Project Provisioning");
     buildProjectProvisioningCompletionSummaryMock.mockReset();
     buildProjectProvisioningCompletionSummaryMock.mockReturnValue("Provisioning complete summary");
+    ensureProjectRegistryMock.mockReset();
+    ensureProjectRegistryMock.mockResolvedValue({ version: 1, projects: [DEFAULT_PROJECT_EXECUTION_CONTEXT.project] });
+    resolveProjectExecutionContextForIssueMock.mockReset();
+    resolveProjectExecutionContextForIssueMock.mockResolvedValue({
+      ok: true,
+      context: DEFAULT_PROJECT_EXECUTION_CONTEXT,
+    });
+    buildProjectRoutingBlockedCommentMock.mockReset();
+    buildProjectRoutingBlockedCommentMock.mockReturnValue("## Project Routing Blocked");
     runIssueCommandMock.mockReset();
     runIssueCommandMock.mockResolvedValue(false);
     getGitHubConfigMock.mockReset();
@@ -535,8 +605,17 @@ describe("main", () => {
       issueNumber: 12,
       issueTitle: "Fix login redirect",
       issueUrl: "https://github.com/owner/repo/issues/12",
-      repository: "owner/repo",
+      trackerRepository: "owner/repo",
+      executionProject: "Evolvo (`evolvo`)",
+      executionRepository: "owner/repo",
       lifecycleState: "selected -> executing",
+    });
+    expect(configureCodingAgentExecutionContextMock).toHaveBeenCalledWith({
+      workDir: "/tmp/evolvo",
+      internalRepositoryUrls: [
+        "https://github.com/owner/repo",
+        "https://github.com/owner/repo",
+      ],
     });
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #12: Fix login redirect\n\nHandle callback URL.");
     expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=1 selected=#12");
@@ -545,6 +624,109 @@ describe("main", () => {
     expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith(
       expect.objectContaining({ minimumIssueCount: 3, maximumOpenIssues: 5 }),
     );
+  });
+
+  it("resolves managed-project execution context before running the coding agent", async () => {
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 14, title: "Managed repo issue", description: "Use project context", state: "open", labels: ["project:habit-cli"] },
+      ])
+      .mockResolvedValueOnce([]);
+    resolveProjectExecutionContextForIssueMock.mockResolvedValueOnce({
+      ok: true,
+      context: {
+        project: {
+          slug: "habit-cli",
+          displayName: "Habit CLI",
+          kind: "managed",
+          issueLabel: "project:habit-cli",
+          trackerRepo: {
+            owner: "owner",
+            repo: "repo",
+            url: "https://github.com/owner/repo",
+          },
+          executionRepo: {
+            owner: "owner",
+            repo: "habit-cli",
+            url: "https://github.com/owner/habit-cli",
+            defaultBranch: "main",
+          },
+          cwd: "/tmp/evolvo/projects/habit-cli",
+          status: "active",
+          sourceIssueNumber: 318,
+          createdAt: "2026-03-07T12:00:00.000Z",
+          updatedAt: "2026-03-07T12:00:00.000Z",
+          provisioning: {
+            labelCreated: true,
+            repoCreated: true,
+            workspacePrepared: true,
+            lastError: null,
+          },
+        },
+        trackerRepository: "owner/repo",
+        executionRepository: "owner/habit-cli",
+      },
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(notifyIssueStartedInDiscordMock).toHaveBeenCalledWith({
+      issueNumber: 14,
+      issueTitle: "Managed repo issue",
+      issueUrl: "https://github.com/owner/repo/issues/14",
+      trackerRepository: "owner/repo",
+      executionProject: "Habit CLI (`habit-cli`)",
+      executionRepository: "owner/habit-cli",
+      lifecycleState: "selected -> executing",
+    });
+    expect(configureCodingAgentExecutionContextMock).toHaveBeenCalledWith({
+      workDir: "/tmp/evolvo/projects/habit-cli",
+      internalRepositoryUrls: [
+        "https://github.com/owner/repo",
+        "https://github.com/owner/habit-cli",
+      ],
+    });
+    expect(addProgressCommentMock).toHaveBeenCalledWith(
+      14,
+      expect.stringContaining("Execution repository: `owner/habit-cli`."),
+    );
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #14: Managed repo issue\n\nUse project context");
+  });
+
+  it("blocks issues with invalid project labels before execution", async () => {
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 15, title: "Broken project labels", description: "bad", state: "open", labels: ["project:missing"] },
+        { number: 16, title: "Fallback issue", description: "good", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([
+        { number: 15, title: "Broken project labels", description: "bad", state: "open", labels: ["project:missing", "blocked"] },
+        { number: 16, title: "Fallback issue", description: "good", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    resolveProjectExecutionContextForIssueMock
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "unknown-project",
+        message: "No project registry entry exists for label `project:missing`.",
+        projectLabels: ["project:missing"],
+      })
+      .mockResolvedValue({
+        ok: true,
+        context: DEFAULT_PROJECT_EXECUTION_CONTEXT,
+      });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(runCodingAgentMock).toHaveBeenCalledTimes(1);
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #16: Fallback issue\n\ngood");
+    expect(addProgressCommentMock).toHaveBeenCalledWith(15, "## Project Routing Blocked");
+    expect(updateLabelsMock).toHaveBeenCalledWith(15, {
+      add: ["blocked"],
+      remove: ["in progress"],
+    });
   });
 
   it("logs validation command name, status, and elapsed time in lifecycle comments", async () => {

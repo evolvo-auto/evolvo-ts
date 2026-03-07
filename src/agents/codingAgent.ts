@@ -383,6 +383,13 @@ export const CODING_AGENT_THREAD_OPTIONS: ThreadOptions = {
   approvalPolicy: "never",
 };
 
+export function buildCodingAgentThreadOptions(workDir: string): ThreadOptions {
+  return {
+    ...CODING_AGENT_THREAD_OPTIONS,
+    workingDirectory: workDir,
+  };
+}
+
 export function buildCodingPrompt(task: string): string {
   return `${CODING_AGENT_INSTRUCTIONS}\n\nTask:\n${task}`;
 }

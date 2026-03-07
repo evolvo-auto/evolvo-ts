@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runCodingAgentMock = vi.fn();
+const configureCodingAgentExecutionContextMock = vi.fn();
 const runPlannerAgentMock = vi.fn();
 const generateStartupIssueTemplatesMock = vi.fn();
 const runIssueCommandMock = vi.fn();
@@ -15,6 +16,9 @@ const transitionCanonicalLifecycleStateMock = vi.fn();
 const buildLifecycleStateCommentMock = vi.fn();
 const writeRuntimeReadinessSignalMock = vi.fn();
 const tryResolveRepositoryDefaultBranchMock = vi.fn();
+const ensureProjectRegistryMock = vi.fn();
+const resolveProjectExecutionContextForIssueMock = vi.fn();
+const buildProjectRoutingBlockedCommentMock = vi.fn();
 
 type MockIssue = {
   number: number;
@@ -97,6 +101,7 @@ vi.mock("./constants/workDir.js", () => ({
 }));
 
 vi.mock("./agents/runCodingAgent.js", () => ({
+  configureCodingAgentExecutionContext: configureCodingAgentExecutionContextMock,
   runCodingAgent: runCodingAgentMock,
 }));
 
@@ -148,6 +153,27 @@ vi.mock("./runtime/lifecycleState.js", () => ({
 
 vi.mock("./runtime/runtimeReadiness.js", () => ({
   writeRuntimeReadinessSignal: writeRuntimeReadinessSignalMock,
+}));
+
+vi.mock("./projects/projectRegistry.js", () => ({
+  buildDefaultProjectContext: (context: {
+    owner: string;
+    repo: string;
+    workDir: string;
+    defaultBranch?: string | null;
+  }) => ({
+    owner: context.owner,
+    repo: context.repo,
+    workDir: context.workDir,
+    defaultBranch: context.defaultBranch ?? null,
+  }),
+  ensureProjectRegistry: ensureProjectRegistryMock,
+}));
+
+vi.mock("./projects/projectExecutionContext.js", () => ({
+  PROJECT_ROUTING_BLOCKED_LABEL: "blocked",
+  buildProjectRoutingBlockedComment: buildProjectRoutingBlockedCommentMock,
+  resolveProjectExecutionContextForIssue: resolveProjectExecutionContextForIssueMock,
 }));
 
 vi.mock("./github/githubConfig.js", () => ({
@@ -227,6 +253,8 @@ describe("main replenishment integration", () => {
     runIssueCommandMock.mockReset();
     runIssueCommandMock.mockResolvedValue(false);
     runCodingAgentMock.mockReset();
+    configureCodingAgentExecutionContextMock.mockReset();
+    configureCodingAgentExecutionContextMock.mockImplementation(() => undefined);
     runPlannerAgentMock.mockReset();
     generateStartupIssueTemplatesMock.mockReset();
     generateStartupIssueTemplatesMock.mockResolvedValue([]);
@@ -289,6 +317,78 @@ describe("main replenishment integration", () => {
     runPostMergeSelfRestartMock.mockResolvedValue(undefined);
     tryResolveRepositoryDefaultBranchMock.mockReset();
     tryResolveRepositoryDefaultBranchMock.mockResolvedValue("main");
+    ensureProjectRegistryMock.mockReset();
+    ensureProjectRegistryMock.mockResolvedValue({
+      version: 1,
+      projects: [
+        {
+          slug: "evolvo",
+          displayName: "Evolvo",
+          kind: "default",
+          issueLabel: "project:evolvo",
+          trackerRepo: {
+            owner: "owner",
+            repo: "repo",
+            url: "https://github.com/owner/repo",
+          },
+          executionRepo: {
+            owner: "owner",
+            repo: "repo",
+            url: "https://github.com/owner/repo",
+            defaultBranch: "main",
+          },
+          cwd: "/tmp/evolvo",
+          status: "active",
+          sourceIssueNumber: null,
+          createdAt: "2026-03-07T12:00:00.000Z",
+          updatedAt: "2026-03-07T12:00:00.000Z",
+          provisioning: {
+            labelCreated: false,
+            repoCreated: true,
+            workspacePrepared: true,
+            lastError: null,
+          },
+        },
+      ],
+    });
+    resolveProjectExecutionContextForIssueMock.mockReset();
+    resolveProjectExecutionContextForIssueMock.mockResolvedValue({
+      ok: true,
+      context: {
+        project: {
+          slug: "evolvo",
+          displayName: "Evolvo",
+          kind: "default",
+          issueLabel: "project:evolvo",
+          trackerRepo: {
+            owner: "owner",
+            repo: "repo",
+            url: "https://github.com/owner/repo",
+          },
+          executionRepo: {
+            owner: "owner",
+            repo: "repo",
+            url: "https://github.com/owner/repo",
+            defaultBranch: "main",
+          },
+          cwd: "/tmp/evolvo",
+          status: "active",
+          sourceIssueNumber: null,
+          createdAt: "2026-03-07T12:00:00.000Z",
+          updatedAt: "2026-03-07T12:00:00.000Z",
+          provisioning: {
+            labelCreated: false,
+            repoCreated: true,
+            workspacePrepared: true,
+            lastError: null,
+          },
+        },
+        trackerRepository: "owner/repo",
+        executionRepository: "owner/repo",
+      },
+    });
+    buildProjectRoutingBlockedCommentMock.mockReset();
+    buildProjectRoutingBlockedCommentMock.mockReturnValue("## Project Routing Blocked");
     getGitHubConfigMock.mockReset();
     getGitHubConfigMock.mockReturnValue({
       token: "token",

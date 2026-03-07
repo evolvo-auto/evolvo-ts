@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ensureProjectRegistry,
   findProjectBySlug,
   getProjectRegistryPath,
   readProjectRegistry,
@@ -41,6 +42,31 @@ describe("projectRegistry", () => {
         cwd: workDir,
       }),
     );
+  });
+
+  it("persists the canonical registry file with the default Evolvo project", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+
+    const registry = await ensureProjectRegistry(workDir, {
+      owner: "evolvo-auto",
+      repo: "evolvo-ts",
+      workDir,
+      defaultBranch: "main",
+    });
+
+    expect(registry.projects).toHaveLength(1);
+    const persisted = JSON.parse(await readFile(getProjectRegistryPath(workDir), "utf8")) as {
+      projects: Array<{ slug: string; executionRepo: { defaultBranch: string | null } }>;
+    };
+    expect(persisted.projects).toEqual([
+      expect.objectContaining({
+        slug: "evolvo",
+        executionRepo: expect.objectContaining({
+          defaultBranch: "main",
+        }),
+      }),
+    ]);
   });
 
   it("upserts a managed project record while preserving the default project", async () => {
