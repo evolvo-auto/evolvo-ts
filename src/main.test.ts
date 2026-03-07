@@ -237,6 +237,65 @@ describe("main", () => {
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #9: B\n\nB");
   });
 
+  it("prioritizes challenge first-attempt issues over self-improvement issues", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 14, title: "Self task", description: "normal", state: "open", labels: ["in progress"] },
+        { number: 15, title: "Challenge task", description: "challenge", state: "open", labels: ["challenge"] },
+      ])
+      .mockResolvedValueOnce([]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #15: Challenge task\n\nchallenge");
+  });
+
+  it("prioritizes retry-ready challenge issues over other challenge issues", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 16, title: "Challenge first", description: "first", state: "open", labels: ["challenge"] },
+        {
+          number: 17,
+          title: "Challenge retry",
+          description: "retry",
+          state: "open",
+          labels: ["challenge", "challenge:ready-to-retry"],
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #17: Challenge retry\n\nretry");
+  });
+
+  it("detects challenge issues from metadata and prioritizes them", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 18, title: "Self task", description: "normal", state: "open", labels: ["in progress"] },
+        {
+          number: 19,
+          title: "Metadata challenge",
+          description: "<!-- evolvo:challenge\nid: challenge-19\n-->",
+          state: "open",
+          labels: [],
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(runCodingAgentMock).toHaveBeenCalledWith(
+      "Issue #19: Metadata challenge\n\n<!-- evolvo:challenge\nid: challenge-19\n-->",
+    );
+  });
+
   it("continues to the next issue after a run completes", async () => {
     listOpenIssuesMock
       .mockResolvedValueOnce([

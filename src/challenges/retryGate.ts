@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { hasIssueLabel, isChallengeIssue } from "../issues/challengeIssue.js";
 import type { IssueSummary } from "../issues/taskIssueManager.js";
 
 const EVOLVO_DIRECTORY_NAME = ".evolvo";
@@ -80,14 +81,6 @@ function normalizeRetryState(state: unknown): ChallengeRetryState {
   return { failuresByChallenge };
 }
 
-function hasLabel(issue: IssueSummary, label: string): boolean {
-  return issue.labels.some((existing) => existing.toLowerCase() === label.toLowerCase());
-}
-
-function isChallengeIssue(issue: IssueSummary): boolean {
-  return hasLabel(issue, "challenge");
-}
-
 function getRetryStatePath(workDir: string): string {
   return join(workDir, EVOLVO_DIRECTORY_NAME, CHALLENGE_RETRY_STATE_FILE_NAME);
 }
@@ -105,7 +98,7 @@ function parseCorrectiveChallengeLink(description: string): number | null {
 function getManagedLabelChanges(issue: IssueSummary, addLabels: string[]): { addLabels: string[]; removeLabels: string[] } {
   const addSet = new Set(addLabels.map((label) => label.toLowerCase()));
   const removeLabels = MANAGED_CHALLENGE_RETRY_LABELS
-    .filter((label) => !addSet.has(label.toLowerCase()) && hasLabel(issue, label));
+    .filter((label) => !addSet.has(label.toLowerCase()) && hasIssueLabel(issue, label));
   const existingLowerCase = new Set(issue.labels.map((label) => label.toLowerCase()));
   const dedupedAddLabels = addLabels.filter((label) => !existingLowerCase.has(label.toLowerCase()));
 
@@ -187,7 +180,7 @@ export async function evaluateChallengeRetryEligibility(
   const state = await readChallengeRetryState(workDir);
   const retryEntry = state.failuresByChallenge[String(issue.number)];
   const attemptCount = toFiniteNonNegativeInteger(retryEntry?.attempts);
-  const blockedLabelPresent = hasLabel(issue, CHALLENGE_BLOCKED_LABEL);
+  const blockedLabelPresent = hasIssueLabel(issue, CHALLENGE_BLOCKED_LABEL);
 
   if (blockedLabelPresent) {
     return {
@@ -200,7 +193,7 @@ export async function evaluateChallengeRetryEligibility(
     };
   }
 
-  const failedLabelPresent = hasLabel(issue, CHALLENGE_FAILED_LABEL) || attemptCount > 0;
+  const failedLabelPresent = hasIssueLabel(issue, CHALLENGE_FAILED_LABEL) || attemptCount > 0;
   if (!failedLabelPresent) {
     return {
       eligible: true,

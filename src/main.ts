@@ -8,6 +8,12 @@ import { runIssueCommand } from "./issues/runIssueCommand.js";
 import { getGitHubConfig } from "./github/githubConfig.js";
 import { GitHubApiError, GitHubClient } from "./github/githubClient.js";
 import { TaskIssueManager, type IssueSummary } from "./issues/taskIssueManager.js";
+import {
+  hasIssueLabel,
+  isChallengeInProgressIssue,
+  isChallengeIssue,
+  isChallengeRetryReadyIssue,
+} from "./issues/challengeIssue.js";
 import { generateStartupIssueTemplates } from "./issues/startupIssueBootstrap.js";
 import {
   formatChallengeMetricsReport,
@@ -38,20 +44,29 @@ const MAX_OPEN_ISSUES = 5;
 const CHALLENGE_MAX_ATTEMPTS = 3;
 const CHALLENGE_RETRY_COOLDOWN_MS = 60 * 60 * 1000;
 
-function hasLabel(issue: IssueSummary, label: string): boolean {
-  return issue.labels.some((currentLabel) => currentLabel.toLowerCase() === label.toLowerCase());
-}
-
 function selectIssueForWork(issues: IssueSummary[]): IssueSummary | null {
-  const notCompleted = issues.filter((issue) => !hasLabel(issue, "completed"));
+  const notCompleted = issues.filter((issue) => !hasIssueLabel(issue, "completed"));
   if (notCompleted.length === 0) {
     return null;
   }
 
-  const candidates = notCompleted;
-  const inProgress = candidates.find((issue) => hasLabel(issue, "in progress"));
+  const challengeCandidates = notCompleted.filter((issue) => isChallengeIssue(issue));
+  if (challengeCandidates.length > 0) {
+    const inProgressChallenge = challengeCandidates.find((issue) => isChallengeInProgressIssue(issue));
+    if (inProgressChallenge) {
+      return inProgressChallenge;
+    }
 
-  return inProgress ?? candidates[0] ?? null;
+    const retryReadyChallenge = challengeCandidates.find((issue) => isChallengeRetryReadyIssue(issue));
+    if (retryReadyChallenge) {
+      return retryReadyChallenge;
+    }
+
+    return challengeCandidates[0] ?? null;
+  }
+
+  const inProgress = notCompleted.find((issue) => hasIssueLabel(issue, "in progress"));
+  return inProgress ?? notCompleted[0] ?? null;
 }
 
 function isOutdatedIssue(issue: IssueSummary): boolean {
@@ -65,10 +80,6 @@ function buildPromptFromIssue(issue: IssueSummary): string {
 
 function formatIssueForLog(issue: IssueSummary): string {
   return `#${issue.number} ${issue.title}`;
-}
-
-function isChallengeIssue(issue: IssueSummary): boolean {
-  return hasLabel(issue, "challenge");
 }
 
 async function updateChallengeMetrics(
@@ -554,7 +565,7 @@ export async function main(): Promise<void> {
         return;
       }
 
-      if (!hasLabel(selectedIssue, "in progress")) {
+      if (!hasIssueLabel(selectedIssue, "in progress")) {
         const result = await issueManager.markInProgress(selectedIssue.number);
         if (!result.ok) {
           console.error(`Could not mark issue #${selectedIssue.number} as in progress: ${result.message}`);

@@ -79,6 +79,24 @@ describe("retryGate", () => {
     });
   });
 
+  it("treats metadata-marked issues as challenge issues", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const issue = createIssue({
+      labels: ["bug"],
+      description: "<!-- evolvo:challenge\nid: challenge-101\n-->",
+    });
+
+    const decision = await evaluateChallengeRetryEligibility(workDir, issue, [issue], {
+      maxAttempts: 3,
+      cooldownMs: 60_000,
+      nowMs: 1_000,
+    });
+
+    expect(decision.reason).toBe("first-attempt");
+    expect(decision.eligible).toBe(true);
+  });
+
   it("rejects retry when corrective issues are still open", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
