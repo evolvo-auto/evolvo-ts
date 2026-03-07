@@ -223,6 +223,31 @@ describe("main", () => {
     );
   });
 
+  it("logs validation command name, status, and elapsed time in lifecycle comments", async () => {
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 13, title: "Validation detail", description: "Check logs", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    runCodingAgentMock.mockResolvedValueOnce({
+      ...DEFAULT_RUN_RESULT,
+      summary: {
+        ...DEFAULT_RUN_RESULT.summary,
+        validationCommands: [{ command: "pnpm validate", exitCode: 1, durationMs: 321 }],
+        failedValidationCommands: [{ command: "pnpm validate", exitCode: 1, durationMs: 321 }],
+        reviewOutcome: "amended",
+      },
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(addProgressCommentMock).toHaveBeenCalledWith(
+      13,
+      expect.stringContaining("`pnpm validate` (name=pnpm, status=1, elapsed=321ms)"),
+    );
+  });
+
   it("prefers an issue already in progress", async () => {
     listOpenIssuesMock
       .mockResolvedValueOnce([
