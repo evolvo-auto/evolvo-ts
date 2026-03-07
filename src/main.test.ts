@@ -22,6 +22,7 @@ const createIssueMock = vi.fn();
 const transitionCanonicalLifecycleStateMock = vi.fn();
 const buildLifecycleStateCommentMock = vi.fn();
 const writeRuntimeReadinessSignalMock = vi.fn();
+const requestCycleLimitDecisionFromOperatorMock = vi.fn();
 
 const DEFAULT_RUN_RESULT = {
   mergedPullRequest: false,
@@ -84,6 +85,10 @@ vi.mock("./runtime/lifecycleState.js", () => ({
 
 vi.mock("./runtime/runtimeReadiness.js", () => ({
   writeRuntimeReadinessSignal: writeRuntimeReadinessSignalMock,
+}));
+
+vi.mock("./runtime/operatorControl.js", () => ({
+  requestCycleLimitDecisionFromOperator: requestCycleLimitDecisionFromOperatorMock,
 }));
 
 vi.mock("./issues/runIssueCommand.js", () => ({
@@ -215,6 +220,8 @@ describe("main", () => {
     buildLifecycleStateCommentMock.mockReturnValue("## Canonical Lifecycle State");
     writeRuntimeReadinessSignalMock.mockReset();
     writeRuntimeReadinessSignalMock.mockResolvedValue("/tmp/evolvo/.evolvo/runtime-readiness.json");
+    requestCycleLimitDecisionFromOperatorMock.mockReset();
+    requestCycleLimitDecisionFromOperatorMock.mockResolvedValue(null);
     process.argv = ["node", "test-runner.ts"];
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1090,6 +1097,51 @@ describe("main", () => {
     );
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
     expect(runCodingAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("continues with an extended cycle budget when Discord operator chooses continue", async () => {
+    let listCalls = 0;
+    listOpenIssuesMock.mockImplementation(async () => {
+      listCalls += 1;
+      if (listCalls <= 100) {
+        return [
+          { number: 201, title: "Long-running task", description: "still open", state: "open", labels: [] },
+        ];
+      }
+      return [];
+    });
+    requestCycleLimitDecisionFromOperatorMock.mockResolvedValueOnce({
+      decision: "continue",
+      additionalCycles: 2,
+      source: "discord",
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(requestCycleLimitDecisionFromOperatorMock).toHaveBeenCalledWith(100);
+    expect(console.log).toHaveBeenCalledWith(
+      "Operator decision via Discord: continue (+2 cycles). New limit=102.",
+    );
+    expect(runCodingAgentMock).toHaveBeenCalledTimes(100);
+  });
+
+  it("quits cleanly at cycle limit when Discord operator chooses quit", async () => {
+    listOpenIssuesMock.mockResolvedValue([
+      { number: 202, title: "Long-running task", description: "still open", state: "open", labels: [] },
+    ]);
+    requestCycleLimitDecisionFromOperatorMock.mockResolvedValueOnce({
+      decision: "quit",
+      additionalCycles: 0,
+      source: "discord",
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(requestCycleLimitDecisionFromOperatorMock).toHaveBeenCalledWith(100);
+    expect(console.error).toHaveBeenCalledWith("Operator decision via Discord: quit.");
+    expect(console.error).toHaveBeenCalledWith("Reached the maximum number of issue cycles (100).");
   });
 
   it("adds a lifecycle issue comment when agent execution fails", async () => {

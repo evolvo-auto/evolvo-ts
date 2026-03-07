@@ -20,6 +20,28 @@ The runtime exits early if any required variable is missing:
 - `GITHUB_OWNER`
 - `GITHUB_REPO`
 
+## Optional Discord Operator Control
+
+Discord operator control is optional and is only used when all required Discord vars are configured:
+
+- `DISCORD_BOT_TOKEN`
+- `DISCORD_CONTROL_GUILD_ID`
+- `DISCORD_CONTROL_CHANNEL_ID`
+- `DISCORD_OPERATOR_USER_ID`
+
+Optional tuning:
+
+- `DISCORD_OPERATOR_TIMEOUT_MS` (default `300000`)
+- `DISCORD_OPERATOR_POLL_INTERVAL_MS` (default `5000`)
+- `DISCORD_CYCLE_EXTENSION` (default `25`)
+
+When configured, if Evolvo reaches its cycle limit it posts a control prompt in the configured Discord channel, tags `<@DISCORD_OPERATOR_USER_ID>`, and waits for a channel reply from that operator:
+
+- `continue` -> extend cycle budget by `DISCORD_CYCLE_EXTENSION`
+- `quit` -> exit cleanly
+
+If Discord vars are not configured, Evolvo does not attempt Discord and keeps existing non-Discord behavior.
+
 ## Startup Flow
 
 On `pnpm dev` / `pnpm start`, the runtime:

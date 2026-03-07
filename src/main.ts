@@ -26,6 +26,7 @@ import {
   selectIssueForWork,
   waitForRunLoopRetry,
 } from "./runtime/loopUtils.js";
+import { requestCycleLimitDecisionFromOperator } from "./runtime/operatorControl.js";
 import {
   addIssueLifecycleComment,
   buildIssueExecutionComment,
@@ -143,7 +144,24 @@ export async function main(): Promise<void> {
   console.log(`Working directory: ${WORK_DIR}`);
   await signalRestartReadinessIfRequested(WORK_DIR);
 
-  issueCycleLoop: for (let cycle = 1; cycle <= MAX_ISSUE_CYCLES; cycle += 1) {
+  let cycleLimit = MAX_ISSUE_CYCLES;
+  issueCycleLoop: for (let cycle = 1; ; cycle += 1) {
+    if (cycle > cycleLimit) {
+      const operatorDecision = await requestCycleLimitDecisionFromOperator(cycleLimit);
+      if (operatorDecision?.decision === "continue" && operatorDecision.additionalCycles > 0) {
+        cycleLimit += operatorDecision.additionalCycles;
+        console.log(
+          `Operator decision via Discord: continue (+${operatorDecision.additionalCycles} cycles). New limit=${cycleLimit}.`,
+        );
+        continue;
+      }
+      if (operatorDecision?.decision === "quit") {
+        console.error("Operator decision via Discord: quit.");
+      }
+      console.error(`Reached the maximum number of issue cycles (${cycleLimit}).`);
+      return;
+    }
+
     let retryAttempt = 0;
     while (true) {
       try {
@@ -390,7 +408,6 @@ export async function main(): Promise<void> {
     }
   }
 
-  console.error(`Reached the maximum number of issue cycles (${MAX_ISSUE_CYCLES}).`);
 }
 
 const isDirectExecution =
