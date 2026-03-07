@@ -434,13 +434,14 @@ export class TaskIssueManager {
     const recentClosed = await this.client.get<GitHubIssue[]>(
       `?state=closed&sort=updated&direction=desc&per_page=${TaskIssueManager.ISSUES_PER_PAGE}&page=1`,
     );
+    const recentClosedIssues = recentClosed.filter((issue) => issue.pull_request === undefined);
     const existingTitles = new Set(
-      [...openIssues.map((issue) => issue.title), ...recentClosed.map((issue) => issue.title)].map((title) =>
+      [...openIssues.map((issue) => issue.title), ...recentClosedIssues.map((issue) => issue.title)].map((title) =>
         title.trim().toLowerCase(),
       ),
     );
 
-    const prioritizedTemplates = prioritizeTemplatesByFailureEvidence(baseTemplates, [...openIssues, ...recentClosed]);
+    const prioritizedTemplates = prioritizeTemplatesByFailureEvidence(baseTemplates, [...openIssues, ...recentClosedIssues]);
     const toCreateCount = Math.min(remainingOpenSlots, minimumIssueCount);
     const templates = selectTemplatesForCreation({
       baseTemplates: prioritizedTemplates,

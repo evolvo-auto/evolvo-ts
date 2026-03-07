@@ -388,6 +388,36 @@ describe("TaskIssueManager", () => {
     );
   });
 
+  it("ignores closed pull request titles when replenishing issue history", async () => {
+    const client = createClientMock();
+    client.get
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        createIssue({
+          number: 4,
+          state: "closed",
+          title: "Candidate A",
+          pull_request: { url: "https://github.com/evolvo-auto/evolvo-ts/pull/4" },
+        }),
+      ]);
+    client.post.mockResolvedValueOnce(createIssue({ number: 31, title: "Candidate A" }));
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.replenishSelfImprovementIssues({
+      minimumIssueCount: 1,
+      maximumOpenIssues: 5,
+      templates: [
+        { title: "Candidate A", description: "Should not be blocked by a closed PR title." },
+        { title: "Candidate B", description: "Should stay unused because Candidate A is still valid." },
+      ],
+    });
+
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0]?.title).toBe("Candidate A");
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(client.post).toHaveBeenCalledWith("", expect.objectContaining({ title: "Candidate A" }));
+  });
+
   it("supports startup-provided templates and creates follow-up titles when needed", async () => {
     const client = createClientMock();
     client.get
