@@ -45,11 +45,33 @@ const PLANNER_OUTPUT_SCHEMA = {
 } as const;
 
 type PlannerResponse = {
-  issues: PlannedIssueDraft[];
+  issues: unknown[];
 };
 
 function normalizeTitle(title: string): string {
   return title.trim().toLowerCase();
+}
+
+function validatePlannedIssueDraft(issue: unknown, index: number): PlannedIssueDraft | null {
+  if (!issue || typeof issue !== "object") {
+    console.warn(`Planner returned invalid issue draft at index ${index}: expected an object.`);
+    return null;
+  }
+
+  const draft = issue as { title?: unknown; description?: unknown };
+  if (typeof draft.title !== "string" || typeof draft.description !== "string") {
+    console.warn(`Planner returned invalid issue draft at index ${index}: title and description must be strings.`);
+    return null;
+  }
+
+  const title = draft.title.trim();
+  const description = draft.description.trim();
+  if (!title || !description) {
+    console.warn(`Planner returned invalid issue draft at index ${index}: title and description cannot be empty.`);
+    return null;
+  }
+
+  return { title, description };
 }
 
 function dedupePlannedIssues(issues: PlannedIssueDraft[]): PlannedIssueDraft[] {
@@ -57,15 +79,13 @@ function dedupePlannedIssues(issues: PlannedIssueDraft[]): PlannedIssueDraft[] {
   const unique: PlannedIssueDraft[] = [];
 
   for (const issue of issues) {
-    const title = issue.title.trim();
-    const description = issue.description.trim();
-    const key = normalizeTitle(title);
-    if (!title || !description || seen.has(key)) {
+    const key = normalizeTitle(issue.title);
+    if (seen.has(key)) {
       continue;
     }
 
     seen.add(key);
-    unique.push({ title, description });
+    unique.push(issue);
   }
 
   return unique;
@@ -77,7 +97,10 @@ function parsePlannerResponse(finalResponse: string): PlannedIssueDraft[] {
     throw new Error("Planner response did not contain an issues array.");
   }
 
-  return dedupePlannedIssues(parsed.issues);
+  const validIssues = parsed.issues
+    .map((issue, index) => validatePlannedIssueDraft(issue, index))
+    .filter((issue): issue is PlannedIssueDraft => issue !== null);
+  return dedupePlannedIssues(validIssues);
 }
 
 function formatIssueListForPrompt(issues: IssueSummary[]): string {

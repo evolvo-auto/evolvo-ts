@@ -102,6 +102,52 @@ describe("plannerAgent", () => {
     });
   });
 
+  it("skips malformed planner issue drafts and logs diagnostics", async () => {
+    threadRunMock.mockResolvedValueOnce({
+      finalResponse: JSON.stringify({
+        issues: [
+          null,
+          { title: 42, description: "Not valid title type." },
+          { title: "   ", description: "Missing title text." },
+          { title: "Valid planner draft", description: "  Keep this one after trimming. " },
+          { title: "Valid planner draft", description: "Duplicate title should be ignored." },
+          { title: "Second valid planner draft", description: "Also valid." },
+        ],
+      }),
+    });
+    const createPlannedIssuesMock = vi.fn().mockResolvedValueOnce({ created: [] });
+    const issueManager = {
+      listOpenIssues: vi.fn().mockResolvedValueOnce([]),
+      listRecentClosedIssues: vi.fn().mockResolvedValueOnce([]),
+      createPlannedIssues: createPlannedIssuesMock,
+    } as unknown as import("../issues/taskIssueManager.js").TaskIssueManager;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { runPlannerAgent } = await import("./plannerAgent.js");
+
+    await runPlannerAgent({
+      cycle: 2,
+      openIssueCount: 0,
+      minimumIssueCount: 3,
+      maximumOpenIssues: 5,
+      issueManager,
+      workDir: "/tmp/evolvo",
+    });
+
+    expect(warnSpy).toHaveBeenCalledTimes(3);
+    expect(warnSpy).toHaveBeenNthCalledWith(1, "Planner returned invalid issue draft at index 0: expected an object.");
+    expect(warnSpy).toHaveBeenNthCalledWith(2, "Planner returned invalid issue draft at index 1: title and description must be strings.");
+    expect(warnSpy).toHaveBeenNthCalledWith(3, "Planner returned invalid issue draft at index 2: title and description cannot be empty.");
+    expect(createPlannedIssuesMock).toHaveBeenCalledWith({
+      minimumIssueCount: 3,
+      maximumOpenIssues: 5,
+      issues: [
+        { title: "Valid planner draft", description: "Keep this one after trimming." },
+        { title: "Second valid planner draft", description: "Also valid." },
+      ],
+    });
+    warnSpy.mockRestore();
+  });
+
   it("returns no created issues when planner analysis fails", async () => {
     threadRunMock.mockRejectedValueOnce(new Error("planner failed"));
     const createPlannedIssuesMock = vi.fn();
