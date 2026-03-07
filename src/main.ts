@@ -11,6 +11,8 @@ import { TaskIssueManager, type IssueSummary } from "./issues/taskIssueManager.j
 export const DEFAULT_PROMPT = "No open issues available. Create an issue first.";
 const MAX_ISSUE_CYCLES = 25;
 const OUTDATED_LABELS = new Set(["outdated", "obsolete", "wontfix", "invalid", "duplicate"]);
+const MIN_REPLENISH_ISSUES = 3;
+const MAX_OPEN_ISSUES = 5;
 
 function hasLabel(issue: IssueSummary, label: string): boolean {
   return issue.labels.some((currentLabel) => currentLabel.toLowerCase() === label.toLowerCase());
@@ -39,6 +41,11 @@ function buildPromptFromIssue(issue: IssueSummary): string {
 
 function formatIssueForLog(issue: IssueSummary): string {
   return `#${issue.number} ${issue.title}`;
+}
+
+function logCreatedIssues(issues: IssueSummary[]): void {
+  const issueList = issues.map((issue) => formatIssueForLog(issue)).join(", ");
+  console.log(`Created ${issues.length} self-improvement issue(s): ${issueList}.`);
 }
 
 function logGitHubFallback(error: unknown): void {
@@ -92,10 +99,20 @@ export async function main(): Promise<void> {
       const selectedIssue = selectIssueForWork(actionableIssues);
 
       if (!selectedIssue) {
+        const replenishment = await issueManager.replenishSelfImprovementIssues({
+          minimumIssueCount: MIN_REPLENISH_ISSUES,
+          maximumOpenIssues: MAX_OPEN_ISSUES,
+        });
+
+        if (replenishment.created.length > 0) {
+          logCreatedIssues(replenishment.created);
+          continue;
+        }
+
         if (cycle === 1) {
           console.log(DEFAULT_PROMPT);
         } else {
-          console.log("No actionable open issues remaining. Issue loop stopped.");
+          console.log("No actionable open issues remaining and no new issues were created. Issue loop stopped.");
         }
         return;
       }
