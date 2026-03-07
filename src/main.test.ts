@@ -215,6 +215,7 @@ describe("main", () => {
     expect(addProgressCommentMock).toHaveBeenCalledWith(12, expect.stringContaining("## Task Start"));
     expect(addProgressCommentMock).toHaveBeenCalledWith(12, expect.stringContaining("## Task Execution Log"));
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #12: Fix login redirect\n\nHandle callback URL.");
+    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=1 selected=#12");
     expect(recordChallengeAttemptMetricsMock).not.toHaveBeenCalled();
     expect(persistChallengeAttemptArtifactMock).not.toHaveBeenCalled();
     expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith(
@@ -378,6 +379,7 @@ describe("main", () => {
       ],
     });
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #19: Generated\n\ngenerated");
+    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:1");
     expect(console.log).toHaveBeenCalledWith(
       "No open issues found on startup. Bootstrapped issue queue from repository analysis.",
     );
@@ -403,6 +405,7 @@ describe("main", () => {
         { title: "Startup issue 3", description: "from repo analysis" },
       ],
     });
+    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:0");
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
   });
 
@@ -453,6 +456,7 @@ describe("main", () => {
     expect(runCodingAgentMock).not.toHaveBeenCalled();
     expect(markInProgressMock).not.toHaveBeenCalled();
     expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
+    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=1 selected=none queueAction=replenish:0");
   });
 
   it("falls back cleanly when GitHub credentials are invalid", async () => {

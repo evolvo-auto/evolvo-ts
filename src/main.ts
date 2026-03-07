@@ -82,6 +82,19 @@ function formatIssueForLog(issue: IssueSummary): string {
   return `#${issue.number} ${issue.title}`;
 }
 
+function logCycleQueueHealth(options: {
+  cycle: number;
+  openCount: number;
+  selectedIssue: IssueSummary | null;
+  queueActionOutcome?: string;
+}): void {
+  const selectedIssueLog = options.selectedIssue ? `#${options.selectedIssue.number}` : "none";
+  const queueActionSuffix = options.queueActionOutcome ? ` queueAction=${options.queueActionOutcome}` : "";
+  console.log(
+    `Cycle ${options.cycle} queue health: open=${options.openCount} selected=${selectedIssueLog}${queueActionSuffix}`,
+  );
+}
+
 async function updateChallengeMetrics(
   issueManager: TaskIssueManager,
   issue: IssueSummary,
@@ -548,6 +561,13 @@ export async function main(): Promise<void> {
                 maximumOpenIssues: MAX_OPEN_ISSUES,
               })
             ).created;
+        const queueActionOutcome = `${isStartupBootstrap ? "bootstrap" : "replenish"}:${createdIssues.length}`;
+        logCycleQueueHealth({
+          cycle,
+          openCount: openIssues.length,
+          selectedIssue: null,
+          queueActionOutcome,
+        });
 
         if (createdIssues.length > 0) {
           if (isStartupBootstrap) {
@@ -564,6 +584,12 @@ export async function main(): Promise<void> {
         }
         return;
       }
+
+      logCycleQueueHealth({
+        cycle,
+        openCount: openIssues.length,
+        selectedIssue,
+      });
 
       if (!hasIssueLabel(selectedIssue, "in progress")) {
         const result = await issueManager.markInProgress(selectedIssue.number);
