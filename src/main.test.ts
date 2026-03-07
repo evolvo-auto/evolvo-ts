@@ -687,6 +687,48 @@ describe("main", () => {
     expect(runCodingAgentMock).not.toHaveBeenCalled();
   });
 
+  it("retries transient GitHub rate-limit failures and recovers", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockRejectedValueOnce(
+        new GitHubApiError(
+          "GitHub API request failed (403): API rate limit exceeded for user",
+          403,
+          { message: "API rate limit exceeded for user." },
+        ),
+      )
+      .mockResolvedValueOnce([
+        { number: 59, title: "Rate limit recovery", description: "retry 403", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(listOpenIssuesMock).toHaveBeenCalledTimes(3);
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #59: Rate limit recovery\n\nretry 403");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("Transient GitHub issue sync failure on cycle 1 (attempt 1/2). Retrying in 50ms."),
+    );
+  });
+
+  it("does not retry non-transient GitHub 403 failures", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock.mockRejectedValue(
+      new GitHubApiError("GitHub API request failed (403): Resource not accessible by integration", 403, null),
+    );
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(listOpenIssuesMock).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(
+      "GitHub issue sync unavailable: GitHub API request failed (403): Resource not accessible by integration",
+    );
+    expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(runCodingAgentMock).not.toHaveBeenCalled();
+  });
+
   it("adds a lifecycle issue comment when agent execution fails", async () => {
     listOpenIssuesMock
       .mockResolvedValueOnce([

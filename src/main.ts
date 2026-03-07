@@ -45,6 +45,7 @@ const CHALLENGE_MAX_ATTEMPTS = 3;
 const CHALLENGE_RETRY_COOLDOWN_MS = 60 * 60 * 1000;
 const RUN_LOOP_GITHUB_MAX_RETRIES = 2;
 const RUN_LOOP_GITHUB_RETRY_BASE_DELAY_MS = 50;
+const RUN_LOOP_GITHUB_RETRY_MAX_DELAY_MS = 1_000;
 const RUN_LOOP_TRANSIENT_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
 function selectIssueForWork(issues: IssueSummary[]): IssueSummary | null {
@@ -586,6 +587,10 @@ function logGitHubFallback(error: unknown): void {
 
 function isTransientGitHubError(error: unknown): boolean {
   if (error instanceof GitHubApiError) {
+    if (isGitHubRateLimitError(error)) {
+      return true;
+    }
+
     return RUN_LOOP_TRANSIENT_STATUS_CODES.has(error.status);
   }
 
@@ -598,6 +603,26 @@ function isTransientGitHubError(error: unknown): boolean {
   }
 
   return false;
+}
+
+function isGitHubRateLimitError(error: GitHubApiError): boolean {
+  if (error.status !== 403) {
+    return false;
+  }
+
+  if (typeof error.responseBody === "object" && error.responseBody !== null && "message" in error.responseBody) {
+    const message = (error.responseBody as { message?: unknown }).message;
+    if (typeof message === "string" && /rate limit/i.test(message)) {
+      return true;
+    }
+  }
+
+  return /rate limit/i.test(error.message);
+}
+
+function getRunLoopRetryDelayMs(retryAttempt: number): number {
+  const exponentialDelay = RUN_LOOP_GITHUB_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, retryAttempt - 1));
+  return Math.min(exponentialDelay, RUN_LOOP_GITHUB_RETRY_MAX_DELAY_MS);
 }
 
 async function waitForRunLoopRetry(delayMs: number): Promise<void> {
@@ -749,7 +774,7 @@ export async function main(): Promise<void> {
       } catch (error) {
         if (isTransientGitHubError(error) && retryAttempt < RUN_LOOP_GITHUB_MAX_RETRIES) {
           retryAttempt += 1;
-          const delayMs = RUN_LOOP_GITHUB_RETRY_BASE_DELAY_MS * retryAttempt;
+          const delayMs = getRunLoopRetryDelayMs(retryAttempt);
           const message = error instanceof Error ? error.message : "unknown error";
           console.error(
             `Transient GitHub issue sync failure on cycle ${cycle} (attempt ${retryAttempt}/${RUN_LOOP_GITHUB_MAX_RETRIES}). Retrying in ${delayMs}ms. Error: ${message}`,
