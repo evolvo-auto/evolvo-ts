@@ -52,6 +52,29 @@ function normalizeTitle(title: string): string {
   return title.trim().toLowerCase();
 }
 
+function normalizeClosedIssueTitle(title: string): string {
+  return normalizeTitle(title)
+    .replace(/\s*\(follow-up\s+\d+\)\s*$/i, "")
+    .replace(/\s+/g, " ");
+}
+
+function dedupeClosedIssueHistory(issues: IssueSummary[]): IssueSummary[] {
+  const seen = new Set<string>();
+  const unique: IssueSummary[] = [];
+
+  for (const issue of issues) {
+    const key = normalizeClosedIssueTitle(issue.title);
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    unique.push(issue);
+  }
+
+  return unique;
+}
+
 function validatePlannedIssueDraft(issue: unknown, index: number): PlannedIssueDraft | null {
   if (!issue || typeof issue !== "object") {
     console.warn(`Planner returned invalid issue draft at index ${index}: expected an object.`);
@@ -114,6 +137,8 @@ function formatIssueListForPrompt(issues: IssueSummary[]): string {
 }
 
 function buildPlannerPrompt(input: PlannerAgentInput, openIssues: IssueSummary[], recentClosedIssues: IssueSummary[]): string {
+  const recentClosedIssueHistory = dedupeClosedIssueHistory(recentClosedIssues).slice(0, 25);
+
   return [
     "Inspect this repository and propose new GitHub issues for Evolvo.",
     "",
@@ -129,7 +154,7 @@ function buildPlannerPrompt(input: PlannerAgentInput, openIssues: IssueSummary[]
     formatIssueListForPrompt(openIssues),
     "",
     "Recently closed issues:",
-    formatIssueListForPrompt(recentClosedIssues.slice(0, 25)),
+    formatIssueListForPrompt(recentClosedIssueHistory),
     "",
     "Return only structured JSON matching the schema.",
   ].join("\n");

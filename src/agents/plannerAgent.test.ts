@@ -102,6 +102,58 @@ describe("plannerAgent", () => {
     });
   });
 
+  it("deduplicates repeated closed-issue follow-ups before applying the 25-item prompt cap", async () => {
+    threadRunMock.mockResolvedValueOnce({
+      finalResponse: JSON.stringify({ issues: [] }),
+    });
+    const createPlannedIssuesMock = vi.fn().mockResolvedValueOnce({ created: [] });
+    const repeatedFollowUps = Array.from({ length: 30 }, (_, index) => ({
+      number: 2000 + index,
+      title: `Startup bootstrap reliability hardening (follow-up ${index + 1})`,
+      description: "Repeated thread title with follow-up suffix.",
+      state: "closed" as const,
+      labels: [],
+    }));
+    const diverseHistory = Array.from({ length: 30 }, (_, index) => ({
+      number: 3000 + index,
+      title: `Diverse closed issue ${index + 1}`,
+      description: "Distinct historical signal.",
+      state: "closed" as const,
+      labels: [],
+    }));
+    const issueManager = {
+      listOpenIssues: vi.fn().mockResolvedValueOnce([]),
+      listRecentClosedIssues: vi.fn().mockResolvedValueOnce([...repeatedFollowUps, ...diverseHistory]),
+      createPlannedIssues: createPlannedIssuesMock,
+    } as unknown as import("../issues/taskIssueManager.js").TaskIssueManager;
+    const { runPlannerAgent } = await import("./plannerAgent.js");
+
+    await runPlannerAgent({
+      cycle: 2,
+      openIssueCount: 0,
+      minimumIssueCount: 3,
+      maximumOpenIssues: 5,
+      issueManager,
+      workDir: "/tmp/evolvo",
+    });
+
+    const plannerPrompt = threadRunMock.mock.calls[0]?.[0] as string;
+    const recentlyClosedSection = plannerPrompt
+      .split("Recently closed issues:\n")[1]
+      ?.split("\n\nReturn only structured JSON matching the schema.")[0] ?? "";
+    const recentClosedLines = recentlyClosedSection.split("\n").filter((line) => line.startsWith("- #"));
+
+    expect(recentClosedLines).toHaveLength(25);
+    expect(plannerPrompt.match(/Startup bootstrap reliability hardening/gi)).toHaveLength(1);
+    expect(plannerPrompt).toContain("Diverse closed issue 24");
+    expect(plannerPrompt).not.toContain("Diverse closed issue 25");
+    expect(createPlannedIssuesMock).toHaveBeenCalledWith({
+      minimumIssueCount: 3,
+      maximumOpenIssues: 5,
+      issues: [],
+    });
+  });
+
   it("skips malformed planner issue drafts and logs diagnostics", async () => {
     threadRunMock.mockResolvedValueOnce({
       finalResponse: JSON.stringify({
