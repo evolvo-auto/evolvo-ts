@@ -406,7 +406,9 @@ describe("main", () => {
       ],
     });
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #19: Generated\n\ngenerated");
-    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:1");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 1 queue health: open=0 selected=none queueAction=bootstrap created=1 outcome=continue",
+    );
     expect(console.log).toHaveBeenCalledWith(
       "No open issues found on startup. Bootstrapped issue queue from repository analysis.",
     );
@@ -440,7 +442,9 @@ describe("main", () => {
     expect(console.error).toHaveBeenCalledWith(
       "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
     );
-    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:0");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 1 queue health: open=0 selected=none queueAction=bootstrap created=0 outcome=stop",
+    );
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
   });
 
@@ -486,7 +490,9 @@ describe("main", () => {
     expect(console.error).toHaveBeenCalledWith(
       "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
     );
-    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:0");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 1 queue health: open=0 selected=none queueAction=bootstrap created=0 outcome=stop",
+    );
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
     expect(runCodingAgentMock).not.toHaveBeenCalled();
   });
@@ -509,7 +515,9 @@ describe("main", () => {
     expect(console.error).toHaveBeenCalledWith(
       "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
     );
-    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:0");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 1 queue health: open=0 selected=none queueAction=bootstrap created=0 outcome=stop",
+    );
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
     expect(runCodingAgentMock).not.toHaveBeenCalled();
   });
@@ -541,7 +549,9 @@ describe("main", () => {
     expect(runCodingAgentMock).not.toHaveBeenCalled();
     expect(markInProgressMock).not.toHaveBeenCalled();
     expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
-    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=1 selected=none queueAction=replenish:0");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 1 queue health: open=1 selected=none queueAction=replenish created=0 outcome=stop",
+    );
   });
 
   it("replenishes completed-only queues and processes created issue on the next cycle", async () => {
@@ -563,7 +573,9 @@ describe("main", () => {
 
     expect(generateStartupIssueTemplatesMock).not.toHaveBeenCalled();
     expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
-    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=1 selected=none queueAction=replenish:1");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 1 queue health: open=1 selected=none queueAction=replenish created=1 outcome=continue",
+    );
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #24: Generated\n\ngenerated");
   });
 
@@ -586,7 +598,9 @@ describe("main", () => {
     await main();
 
     expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
-    expect(console.log).toHaveBeenCalledWith("Cycle 2 queue health: open=0 selected=none queueAction=replenish:1");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 2 queue health: open=0 selected=none queueAction=replenish created=1 outcome=continue",
+    );
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(1, "Issue #31: Initial\n\nfirst");
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(2, "Issue #32: Replenished\n\nsecond");
   });
@@ -618,7 +632,9 @@ describe("main", () => {
     expect(markInProgressMock).toHaveBeenNthCalledWith(2, 42);
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(1, "Issue #41: First\n\none");
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(2, "Issue #42: Second\n\ntwo");
-    expect(console.log).toHaveBeenCalledWith("Cycle 2 queue health: open=0 selected=none queueAction=replenish:1");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 2 queue health: open=0 selected=none queueAction=replenish created=1 outcome=continue",
+    );
     expect(console.log).not.toHaveBeenCalledWith(DEFAULT_PROMPT);
     const cycleThreeLogIndex = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.findIndex(
       (call) => call[0] === "Cycle 3 queue health: open=1 selected=#42",

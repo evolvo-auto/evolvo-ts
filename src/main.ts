@@ -90,10 +90,16 @@ function logCycleQueueHealth(options: {
   cycle: number;
   openCount: number;
   selectedIssue: IssueSummary | null;
-  queueActionOutcome?: string;
+  queueAction?: {
+    type: "bootstrap" | "replenish";
+    createdCount: number;
+    outcome: "continue" | "stop";
+  };
 }): void {
   const selectedIssueLog = options.selectedIssue ? `#${options.selectedIssue.number}` : "none";
-  const queueActionSuffix = options.queueActionOutcome ? ` queueAction=${options.queueActionOutcome}` : "";
+  const queueActionSuffix = options.queueAction
+    ? ` queueAction=${options.queueAction.type} created=${options.queueAction.createdCount} outcome=${options.queueAction.outcome}`
+    : "";
   console.log(
     `Cycle ${options.cycle} queue health: open=${options.openCount} selected=${selectedIssueLog}${queueActionSuffix}`,
   );
@@ -678,12 +684,15 @@ export async function main(): Promise<void> {
                   maximumOpenIssues: MAX_OPEN_ISSUES,
                 })
               ).created;
-          const queueActionOutcome = `${isStartupBootstrap ? "bootstrap" : "replenish"}:${createdIssues.length}`;
           logCycleQueueHealth({
             cycle,
             openCount: openIssues.length,
             selectedIssue: null,
-            queueActionOutcome,
+            queueAction: {
+              type: isStartupBootstrap ? "bootstrap" : "replenish",
+              createdCount: createdIssues.length,
+              outcome: createdIssues.length > 0 ? "continue" : "stop",
+            },
           });
 
           if (createdIssues.length > 0) {
