@@ -300,6 +300,47 @@ describe("main replenishment integration", () => {
     expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
   });
 
+  it("replenishes a drained queue with follow-up issue titles and keeps processing", async () => {
+    resetMockApiState();
+    mockApiState.issues.unshift(
+      {
+        number: 2,
+        title: "Add regression test for empty-queue issue replenishment flow",
+        body: "already completed once",
+        state: "closed",
+        labels: [{ name: "completed" }],
+      },
+      {
+        number: 3,
+        title: "Add regression test for empty-queue issue replenishment flow (follow-up 1)",
+        body: "already completed twice",
+        state: "closed",
+        labels: [{ name: "completed" }],
+      },
+    );
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(console.log).toHaveBeenCalledWith("Cycle 2 queue health: open=0 selected=none queueAction=replenish:3");
+    expect(runCodingAgentMock).toHaveBeenCalledTimes(2);
+    expect(runCodingAgentMock).toHaveBeenNthCalledWith(1, "Issue #10: Initial work item\n\nfirst pass");
+    const secondPrompt = runCodingAgentMock.mock.calls[1]?.[0];
+    expect(secondPrompt).toContain(`Issue #11: ${mockApiState.createdIssueTitles[0]}`);
+    expect(mockApiState.createdIssueTitles).toContain(
+      "Add regression test for empty-queue issue replenishment flow (follow-up 2)",
+    );
+    const followUpIssue = mockApiState.issues.find(
+      (issue) => issue.title === "Add regression test for empty-queue issue replenishment flow (follow-up 2)",
+    );
+    expect(followUpIssue?.body).toContain("Follow-up: address remaining gaps discovered after earlier work.");
+    expect(console.log).not.toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(console.log).not.toHaveBeenCalledWith(
+      "No actionable open issues remaining and no new issues were created. Issue loop stopped.",
+    );
+    expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
+  });
+
   it("bootstraps startup issues for an empty queue and proceeds into normal issue selection", async () => {
     resetMockApiStateToEmptyQueue();
     generateStartupIssueTemplatesMock.mockResolvedValueOnce([
