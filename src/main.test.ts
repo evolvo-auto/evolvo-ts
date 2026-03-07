@@ -484,6 +484,29 @@ describe("main", () => {
     expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=1 selected=none queueAction=replenish:0");
   });
 
+  it("replenishes completed-only queues and processes created issue on the next cycle", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 4, title: "Done", description: "Done", state: "open", labels: ["completed"] },
+      ])
+      .mockResolvedValueOnce([
+        { number: 24, title: "Generated", description: "generated", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    replenishSelfImprovementIssuesMock.mockResolvedValueOnce({
+      created: [{ number: 24, title: "Generated", description: "generated", state: "open", labels: [] }],
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(generateStartupIssueTemplatesMock).not.toHaveBeenCalled();
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
+    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=1 selected=none queueAction=replenish:1");
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #24: Generated\n\ngenerated");
+  });
+
   it("falls back cleanly when GitHub credentials are invalid", async () => {
     listOpenIssuesMock.mockRejectedValue(
       new GitHubApiError("GitHub API request failed (401): Bad credentials", 401, null),
