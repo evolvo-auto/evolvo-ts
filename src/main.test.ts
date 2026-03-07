@@ -6,6 +6,7 @@ const runIssueCommandMock = vi.fn();
 const getGitHubConfigMock = vi.fn();
 const listOpenIssuesMock = vi.fn();
 const markInProgressMock = vi.fn();
+const markCompletedMock = vi.fn();
 const addProgressCommentMock = vi.fn();
 const closeIssueMock = vi.fn();
 const replenishSelfImprovementIssuesMock = vi.fn();
@@ -96,6 +97,7 @@ vi.mock("./issues/taskIssueManager.js", () => ({
   TaskIssueManager: class {
     listOpenIssues = listOpenIssuesMock;
     markInProgress = markInProgressMock;
+    markCompleted = markCompletedMock;
     addProgressComment = addProgressCommentMock;
     closeIssue = closeIssueMock;
     replenishSelfImprovementIssues = replenishSelfImprovementIssuesMock;
@@ -126,6 +128,8 @@ describe("main", () => {
     listOpenIssuesMock.mockResolvedValue([]);
     markInProgressMock.mockReset();
     markInProgressMock.mockResolvedValue({ ok: true, message: "ok" });
+    markCompletedMock.mockReset();
+    markCompletedMock.mockResolvedValue({ ok: true, message: "completed" });
     addProgressCommentMock.mockReset();
     addProgressCommentMock.mockResolvedValue({ ok: true, message: "commented" });
     closeIssueMock.mockReset();
@@ -178,7 +182,7 @@ describe("main", () => {
       message: "Created issue #100.",
       issue: { number: 100, title: "Generated", description: "body", state: "open", labels: [] },
     });
-    process.argv = ["node", "src/main.ts"];
+    process.argv = ["node", "test-runner.ts"];
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -850,6 +854,36 @@ describe("main", () => {
       88,
       expect.stringContaining("`.evolvo/challenge-attempts/88/0001.json`"),
     );
+    expect(markCompletedMock).toHaveBeenCalledWith(
+      88,
+      expect.stringContaining("## Challenge Completion"),
+    );
+    expect(markCompletedMock).toHaveBeenCalledWith(
+      88,
+      expect.stringContaining("Lifecycle state: terminal success (`completed`)"),
+    );
+  });
+
+  it("does not mark challenge as completed when review outcome is amended", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 92, title: "Challenge amended", description: "needs fixes", state: "open", labels: ["challenge"] },
+      ])
+      .mockResolvedValueOnce([]);
+    runCodingAgentMock.mockResolvedValueOnce({
+      ...DEFAULT_RUN_RESULT,
+      summary: {
+        ...DEFAULT_RUN_RESULT.summary,
+        reviewOutcome: "amended",
+        failedValidationCommands: [{ command: "pnpm validate", commandName: "pnpm", exitCode: 1, durationMs: 120 }],
+      },
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(markCompletedMock).not.toHaveBeenCalled();
   });
 
   it("records challenge metrics for challenge runtime failures", async () => {
@@ -968,5 +1002,17 @@ describe("main", () => {
     await main();
 
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #91: Retry allowed\n\nallowed");
+  });
+
+  it("does not evaluate retry gate for completed challenge issues", async () => {
+    listOpenIssuesMock.mockResolvedValue([
+      { number: 93, title: "Done challenge", description: "already done", state: "open", labels: ["challenge", "completed"] },
+    ]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(evaluateChallengeRetryEligibilityMock).not.toHaveBeenCalled();
+    expect(runCodingAgentMock).not.toHaveBeenCalled();
   });
 });

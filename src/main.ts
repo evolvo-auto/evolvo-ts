@@ -220,6 +220,38 @@ function buildChallengeRetryGateComment(issue: IssueSummary, decision: Challenge
   ].join("\n");
 }
 
+function buildChallengeCompletionSummary(issue: IssueSummary, result: CodingAgentRunResult): string {
+  const reviewOutcome = result.summary.reviewOutcome;
+  const validationStatus = result.summary.failedValidationCommands.length === 0 ? "all passed" : "had failures";
+  const mergeStatus = result.mergedPullRequest ? "merged into main" : "not merged in this run";
+  return [
+    "## Challenge Completion",
+    `- Challenge issue #${issue.number} succeeded.`,
+    `- Acceptance criteria status: met (review outcome: \`${reviewOutcome}\`, validation: ${validationStatus}).`,
+    `- Pull request status: ${mergeStatus}.`,
+    "- Lifecycle state: terminal success (`completed`).",
+    "- Further attempts are blocked unless this challenge is explicitly reopened or re-issued.",
+  ].join("\n");
+}
+
+async function finalizeChallengeSuccess(
+  issueManager: TaskIssueManager,
+  issue: IssueSummary,
+  runResult: CodingAgentRunResult,
+): Promise<void> {
+  if (!isChallengeIssue(issue) || runResult.summary.reviewOutcome !== "accepted") {
+    return;
+  }
+
+  const completionResult = await issueManager.markCompleted(issue.number, buildChallengeCompletionSummary(issue, runResult));
+  const alreadyTerminal =
+    /already marked as completed/i.test(completionResult.message) ||
+    /is closed and cannot be completed/i.test(completionResult.message);
+  if (!completionResult.ok && !alreadyTerminal) {
+    console.error(`Could not finalize challenge issue #${issue.number}: ${completionResult.message}`);
+  }
+}
+
 async function applyChallengeRetryGate(
   issueManager: TaskIssueManager,
   openIssues: IssueSummary[],
@@ -229,6 +261,11 @@ async function applyChallengeRetryGate(
 
   for (const issue of issues) {
     if (!isChallengeIssue(issue)) {
+      eligible.push(issue);
+      continue;
+    }
+
+    if (hasIssueLabel(issue, "completed")) {
       eligible.push(issue);
       continue;
     }
@@ -760,6 +797,7 @@ export async function main(): Promise<void> {
             selectedIssue.number,
             buildIssueExecutionComment(selectedIssue, runResult, challengeEvidence),
           );
+          await finalizeChallengeSuccess(issueManager, selectedIssue, runResult);
         }
 
         if (runResult?.mergedPullRequest) {
