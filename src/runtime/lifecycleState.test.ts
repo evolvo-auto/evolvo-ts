@@ -118,6 +118,69 @@ describe("lifecycleState", () => {
     expect(state.issues["9"]?.transitionCount).toBe(1);
   });
 
+  it("supports amended and completed transitions for review and terminal success paths", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+
+    await transitionCanonicalLifecycleState(workDir, {
+      issueNumber: 77,
+      kind: "challenge",
+      nextState: "selected",
+      atMs: 1000,
+    });
+    await transitionCanonicalLifecycleState(workDir, {
+      issueNumber: 77,
+      kind: "challenge",
+      nextState: "executing",
+      atMs: 1100,
+    });
+    await transitionCanonicalLifecycleState(workDir, {
+      issueNumber: 77,
+      kind: "challenge",
+      nextState: "under_review",
+      atMs: 1200,
+    });
+
+    const amended = await transitionCanonicalLifecycleState(workDir, {
+      issueNumber: 77,
+      kind: "challenge",
+      nextState: "amended",
+      atMs: 1300,
+    });
+    const backToExecuting = await transitionCanonicalLifecycleState(workDir, {
+      issueNumber: 77,
+      kind: "challenge",
+      nextState: "executing",
+      atMs: 1400,
+    });
+    await transitionCanonicalLifecycleState(workDir, {
+      issueNumber: 77,
+      kind: "challenge",
+      nextState: "under_review",
+      atMs: 1500,
+    });
+    await transitionCanonicalLifecycleState(workDir, {
+      issueNumber: 77,
+      kind: "challenge",
+      nextState: "accepted",
+      atMs: 1600,
+    });
+    const completed = await transitionCanonicalLifecycleState(workDir, {
+      issueNumber: 77,
+      kind: "challenge",
+      nextState: "completed",
+      atMs: 1700,
+    });
+
+    expect(amended.ok).toBe(true);
+    expect(backToExecuting.ok).toBe(true);
+    expect(completed.ok).toBe(true);
+    expect(completed.previousState).toBe("accepted");
+
+    const state = await readCanonicalLifecycleState(workDir);
+    expect(state.issues["77"]?.state).toBe("completed");
+  });
+
   it("normalizes malformed persisted state", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);

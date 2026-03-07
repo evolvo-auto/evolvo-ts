@@ -1257,6 +1257,13 @@ describe("main", () => {
       88,
       expect.stringContaining("Lifecycle state: terminal success (`completed`)"),
     );
+    expect(transitionCanonicalLifecycleStateMock).toHaveBeenCalledWith(
+      "/tmp/evolvo",
+      expect.objectContaining({
+        issueNumber: 88,
+        nextState: "completed",
+      }),
+    );
   });
 
   it("does not mark challenge as completed when review outcome is amended", async () => {
@@ -1279,6 +1286,20 @@ describe("main", () => {
     await main();
 
     expect(markCompletedMock).not.toHaveBeenCalled();
+    expect(transitionCanonicalLifecycleStateMock).toHaveBeenCalledWith(
+      "/tmp/evolvo",
+      expect.objectContaining({
+        issueNumber: 92,
+        nextState: "amended",
+      }),
+    );
+    expect(transitionCanonicalLifecycleStateMock).not.toHaveBeenCalledWith(
+      "/tmp/evolvo",
+      expect.objectContaining({
+        issueNumber: 92,
+        nextState: "rejected",
+      }),
+    );
   });
 
   it("records challenge metrics for challenge runtime failures", async () => {

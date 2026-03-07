@@ -72,6 +72,18 @@ function buildLifecycleDerivedState(issue: IssueSummary, runResult: CodingAgentR
   };
 }
 
+function mapReviewOutcomeToLifecycleState(reviewOutcome: string): "accepted" | "amended" | "rejected" {
+  if (reviewOutcome === "accepted") {
+    return "accepted";
+  }
+
+  if (reviewOutcome === "amended") {
+    return "amended";
+  }
+
+  return "rejected";
+}
+
 async function transitionIssueLifecycleState(
   issueManager: TaskIssueManager,
   options: {
@@ -303,7 +315,7 @@ export async function main(): Promise<void> {
           });
           await transitionIssueLifecycleState(issueManager, {
             issue: selectedIssue,
-            nextState: runResult.summary.reviewOutcome === "accepted" ? "accepted" : "rejected",
+            nextState: mapReviewOutcomeToLifecycleState(runResult.summary.reviewOutcome),
             reason: `review outcome received: ${runResult.summary.reviewOutcome}`,
             cycle,
             runResult,
@@ -333,7 +345,16 @@ export async function main(): Promise<void> {
             selectedIssue.number,
             buildIssueExecutionComment(selectedIssue, runResult, challengeEvidence),
           );
-          await finalizeChallengeSuccess(issueManager, selectedIssue, runResult);
+          const challengeCompleted = await finalizeChallengeSuccess(issueManager, selectedIssue, runResult);
+          if (challengeCompleted) {
+            await transitionIssueLifecycleState(issueManager, {
+              issue: selectedIssue,
+              nextState: "completed",
+              reason: "challenge issue marked as completed after accepted review outcome",
+              cycle,
+              runResult,
+            });
+          }
         }
 
         if (runResult?.mergedPullRequest) {

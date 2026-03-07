@@ -158,9 +158,9 @@ export async function finalizeChallengeSuccess(
   issueManager: TaskIssueManager,
   issue: IssueSummary,
   runResult: CodingAgentRunResult,
-): Promise<void> {
+): Promise<boolean> {
   if (!isChallengeIssue(issue) || runResult.summary.reviewOutcome !== "accepted") {
-    return;
+    return false;
   }
 
   const completionResult = await issueManager.markCompleted(issue.number, buildChallengeCompletionSummary(issue, runResult));
@@ -169,7 +169,10 @@ export async function finalizeChallengeSuccess(
     /is closed and cannot be completed/i.test(completionResult.message);
   if (!completionResult.ok && !alreadyTerminal) {
     console.error(`Could not finalize challenge issue #${issue.number}: ${completionResult.message}`);
+    return false;
   }
+
+  return completionResult.ok || alreadyTerminal;
 }
 
 export async function applyChallengeRetryGate(options: {
