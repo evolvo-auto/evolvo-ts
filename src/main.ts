@@ -51,14 +51,29 @@ function logCreatedIssues(issues: IssueSummary[]): void {
 }
 
 async function bootstrapStartupIssues(issueManager: TaskIssueManager): Promise<IssueSummary[]> {
-  const templates = await generateStartupIssueTemplates(WORK_DIR, { targetCount: MIN_REPLENISH_ISSUES });
-  const replenishment = await issueManager.replenishSelfImprovementIssues({
-    minimumIssueCount: MIN_REPLENISH_ISSUES,
-    maximumOpenIssues: MAX_OPEN_ISSUES,
-    templates,
-  });
+  try {
+    const templates = await generateStartupIssueTemplates(WORK_DIR, { targetCount: MIN_REPLENISH_ISSUES });
+    const replenishment = await issueManager.replenishSelfImprovementIssues({
+      minimumIssueCount: MIN_REPLENISH_ISSUES,
+      maximumOpenIssues: MAX_OPEN_ISSUES,
+      templates,
+    });
 
-  return replenishment.created;
+    return replenishment.created;
+  } catch (error) {
+    if (error instanceof Error) {
+      console.error(`Startup repository analysis failed: ${error.message}`);
+    } else {
+      console.error("Startup repository analysis failed with an unknown error.");
+    }
+
+    const replenishment = await issueManager.replenishSelfImprovementIssues({
+      minimumIssueCount: MIN_REPLENISH_ISSUES,
+      maximumOpenIssues: MAX_OPEN_ISSUES,
+    });
+
+    return replenishment.created;
+  }
 }
 
 function logGitHubFallback(error: unknown): void {

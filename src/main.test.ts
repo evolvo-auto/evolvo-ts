@@ -242,6 +242,26 @@ describe("main", () => {
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
   });
 
+  it("falls back to default startup issue replenishment when repository analysis throws", async () => {
+    generateStartupIssueTemplatesMock.mockRejectedValueOnce(new Error("analysis boom"));
+    listOpenIssuesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { number: 30, title: "Fallback issue", description: "fallback", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    replenishSelfImprovementIssuesMock.mockResolvedValueOnce({
+      created: [{ number: 30, title: "Fallback issue", description: "fallback", state: "open", labels: [] }],
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(console.error).toHaveBeenCalledWith("Startup repository analysis failed: analysis boom");
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #30: Fallback issue\n\nfallback");
+  });
+
   it("closes outdated issues before selecting work", async () => {
     listOpenIssuesMock
       .mockResolvedValueOnce([
