@@ -431,6 +431,10 @@ describe("main", () => {
       ],
     });
     expect(console.error).toHaveBeenCalledWith("Startup bootstrap created 0 issues from 3 repository-derived template(s).");
+    expect(console.error).toHaveBeenCalledWith("Startup repository-derived bootstrap created 0 issues. Issue queue remains empty.");
+    expect(console.error).toHaveBeenCalledWith(
+      "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
+    );
     expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:0");
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
   });
@@ -466,8 +470,27 @@ describe("main", () => {
     expect(console.error).toHaveBeenCalledWith("Startup repository analysis failed: analysis boom");
     expect(console.error).toHaveBeenCalledWith("Startup issue bootstrap is falling back to default issue templates.");
     expect(console.error).toHaveBeenCalledWith("Startup fallback issue creation failed: issue create denied");
+    expect(console.error).toHaveBeenCalledWith("Startup fallback bootstrap created 0 issues. Issue queue remains empty.");
     expect(console.error).toHaveBeenCalledWith(
-      "Startup issue queue remains empty. Recovery: verify GitHub token permissions and repository issue settings, then rerun.",
+      "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
+    );
+    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:0");
+    expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(runCodingAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("logs actionable startup diagnostics when fallback issue creation returns no issues", async () => {
+    generateStartupIssueTemplatesMock.mockRejectedValueOnce(new Error("analysis boom"));
+    replenishSelfImprovementIssuesMock.mockResolvedValueOnce({ created: [] });
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(console.error).toHaveBeenCalledWith("Startup repository analysis failed: analysis boom");
+    expect(console.error).toHaveBeenCalledWith("Startup issue bootstrap is falling back to default issue templates.");
+    expect(console.error).toHaveBeenCalledWith("Startup fallback bootstrap created 0 issues. Issue queue remains empty.");
+    expect(console.error).toHaveBeenCalledWith(
+      "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
     );
     expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:0");
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);

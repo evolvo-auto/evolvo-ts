@@ -482,6 +482,13 @@ function logCreatedIssues(issues: IssueSummary[]): void {
   console.log(`Created ${issues.length} self-improvement issue(s): ${issueList}.`);
 }
 
+function logStartupBootstrapRecoveryGuidance(context: "repository-derived bootstrap" | "fallback bootstrap"): void {
+  console.error(`Startup ${context} created 0 issues. Issue queue remains empty.`);
+  console.error(
+    "Recovery: verify GitHub token permissions and repository issue settings, then run `pnpm dev -- issues list` and create an issue manually if needed.",
+  );
+}
+
 async function bootstrapStartupIssues(issueManager: TaskIssueManager): Promise<IssueSummary[]> {
   const targetCount = MIN_REPLENISH_ISSUES;
   try {
@@ -496,6 +503,7 @@ async function bootstrapStartupIssues(issueManager: TaskIssueManager): Promise<I
       console.error(
         `Startup bootstrap created 0 issues from ${templates.length} repository-derived template(s).`,
       );
+      logStartupBootstrapRecoveryGuidance("repository-derived bootstrap");
     }
 
     return replenishment.created;
@@ -515,9 +523,7 @@ async function bootstrapStartupIssues(issueManager: TaskIssueManager): Promise<I
       });
 
       if (replenishment.created.length === 0) {
-        console.error(
-          "Startup fallback issue creation created 0 issues. Recovery: verify issue creation permissions and rerun.",
-        );
+        logStartupBootstrapRecoveryGuidance("fallback bootstrap");
       }
 
       return replenishment.created;
@@ -528,9 +534,7 @@ async function bootstrapStartupIssues(issueManager: TaskIssueManager): Promise<I
         console.error("Startup fallback issue creation failed with an unknown error.");
       }
 
-      console.error(
-        "Startup issue queue remains empty. Recovery: verify GitHub token permissions and repository issue settings, then rerun.",
-      );
+      logStartupBootstrapRecoveryGuidance("fallback bootstrap");
       return [];
     }
   }
