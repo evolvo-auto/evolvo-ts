@@ -262,9 +262,14 @@ function formatDuration(durationMs: number | null): string {
   return `${Math.round(durationMs)}ms`;
 }
 
+function getCommandName(command: string): string {
+  const [commandName] = command.trim().split(/\s+/, 1);
+  return commandName || "unknown";
+}
+
 function formatValidationCommand(command: CommandExecutionSummary): string {
   const exitCode = command.exitCode === null ? "unknown" : String(command.exitCode);
-  return `- \`${command.command}\` (exit=${exitCode}, duration=${formatDuration(command.durationMs)})`;
+  return `- \`${command.command}\` (name=${getCommandName(command.command)}, status=${exitCode}, elapsed=${formatDuration(command.durationMs)})`;
 }
 
 function summarizeRetryNotes(result: CodingAgentRunResult): string {
