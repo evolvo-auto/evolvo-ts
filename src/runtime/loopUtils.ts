@@ -137,6 +137,10 @@ export async function bootstrapStartupIssues(issueManager: TaskIssueManager, wor
 
     return replenishment.created;
   } catch (error) {
+    if (isTransientGitHubError(error)) {
+      throw error;
+    }
+
     if (error instanceof Error) {
       console.error(`Startup repository analysis failed: ${error.message}`);
     } else {
@@ -164,6 +168,10 @@ export async function bootstrapStartupIssues(issueManager: TaskIssueManager, wor
 
       return replenishment.created;
     } catch (fallbackError) {
+      if (isTransientGitHubError(fallbackError)) {
+        throw fallbackError;
+      }
+
       if (fallbackError instanceof Error) {
         console.error(`Startup fallback issue creation failed: ${fallbackError.message}`);
       } else {

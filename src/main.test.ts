@@ -785,6 +785,29 @@ describe("main", () => {
     );
   });
 
+  it("retries transient GitHub bootstrap failures in the run loop and recovers", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { number: 68, title: "Recover after bootstrap retry", description: "bootstrap retry", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    replenishSelfImprovementIssuesMock.mockRejectedValueOnce(
+      new GitHubApiError("GitHub API request failed (503): Service Unavailable", 503, null),
+    );
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(listOpenIssuesMock).toHaveBeenCalledTimes(3);
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledTimes(2);
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #68: Recover after bootstrap retry\n\nbootstrap retry");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("Transient GitHub issue sync failure on cycle 1 (attempt 1/2). Retrying in 50ms."),
+    );
+  });
+
   it("stops after bounded retries when transient GitHub API failures persist", async () => {
     process.argv = ["node", "test-runner.ts"];
     listOpenIssuesMock.mockRejectedValue(
@@ -795,6 +818,31 @@ describe("main", () => {
     await main();
 
     expect(listOpenIssuesMock).toHaveBeenCalledTimes(3);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("Transient GitHub issue sync failure on cycle 1 (attempt 1/2). Retrying in 50ms."),
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("Transient GitHub issue sync failure on cycle 1 (attempt 2/2). Retrying in 100ms."),
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      "GitHub issue sync unavailable: GitHub API request failed (503): Service Unavailable",
+    );
+    expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(runCodingAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("stops after bounded retries when transient GitHub bootstrap failures persist", async () => {
+    process.argv = ["node", "test-runner.ts"];
+    listOpenIssuesMock.mockResolvedValue([]);
+    replenishSelfImprovementIssuesMock.mockRejectedValue(
+      new GitHubApiError("GitHub API request failed (503): Service Unavailable", 503, null),
+    );
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(listOpenIssuesMock).toHaveBeenCalledTimes(3);
+    expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledTimes(3);
     expect(console.error).toHaveBeenCalledWith(
       expect.stringContaining("Transient GitHub issue sync failure on cycle 1 (attempt 1/2). Retrying in 50ms."),
     );
