@@ -482,8 +482,6 @@ export async function pollDiscordGracefulShutdownCommand(
       return null;
     }
 
-    await writeDiscordControlCursor(workDir, getHighestSnowflakeId(messages.map((message) => message.id)));
-
     let gracefulShutdownRequest: GracefulShutdownRequest | null = null;
     const orderedMessages = [...messages].sort((left, right) => {
       if (left.id === right.id) {
@@ -498,79 +496,78 @@ export async function pollDiscordGracefulShutdownCommand(
         continue;
       }
 
-      const shutdownCommand = parseGracefulShutdownCommand(message.content);
-      if (shutdownCommand !== null) {
-        const recordedRequest = await recordGracefulShutdownRequest(workDir, {
-          messageId: message.id,
-          mode: shutdownCommand.mode,
-        });
-        gracefulShutdownRequest = recordedRequest.request;
-        if (recordedRequest.created) {
-          try {
-            await sendGracefulShutdownAcknowledgement(config, recordedRequest.request);
-          } catch (error) {
-            const sendMessage = buildStepFailureMessage("send-quit-ack", error);
-            console.error(`Discord graceful shutdown acknowledgement failed: ${sendMessage}`);
-            logDiscordMissingAccessHint(sendMessage);
+      if (message.author?.id === config.operatorUserId) {
+        const shutdownCommand = parseGracefulShutdownCommand(message.content);
+        if (shutdownCommand !== null) {
+          const recordedRequest = await recordGracefulShutdownRequest(workDir, {
+            messageId: message.id,
+            mode: shutdownCommand.mode,
+          });
+          gracefulShutdownRequest = recordedRequest.request;
+          if (recordedRequest.created) {
+            try {
+              await sendGracefulShutdownAcknowledgement(config, recordedRequest.request);
+            } catch (error) {
+              const sendMessage = buildStepFailureMessage("send-quit-ack", error);
+              console.error(`Discord graceful shutdown acknowledgement failed: ${sendMessage}`);
+              logDiscordMissingAccessHint(sendMessage);
+            }
+          }
+        } else {
+          const requestedProjectName = parseStartProjectName(message.content);
+          if (requestedProjectName !== null && handlers.onStartProject) {
+            const recordedReceipt = await recordDiscordControlCommandReceipt(workDir, {
+              command: "start-project",
+              messageId: message.id,
+            });
+            if (recordedReceipt) {
+              let startProjectRequest: StartProjectCommandRequest | null = null;
+              let commandResult: StartProjectCommandResult;
+
+              try {
+                const normalized = normalizeProjectNameInput(requestedProjectName);
+                startProjectRequest = {
+                  messageId: message.id,
+                  requestedAt: new Date().toISOString(),
+                  requestedBy: `discord:${config.operatorUserId}`,
+                  displayName: normalized.displayName,
+                  slug: normalized.slug,
+                  repositoryName: normalized.repositoryName,
+                  issueLabel: normalized.issueLabel,
+                  workspaceRelativePath: normalized.workspaceRelativePath,
+                };
+                commandResult = await handlers.onStartProject(startProjectRequest);
+              } catch (error) {
+                const fallbackDisplayName = requestedProjectName.trim() || "<missing project name>";
+                startProjectRequest = {
+                  messageId: message.id,
+                  requestedAt: new Date().toISOString(),
+                  requestedBy: `discord:${config.operatorUserId}`,
+                  displayName: fallbackDisplayName,
+                  slug: "",
+                  repositoryName: "",
+                  issueLabel: "",
+                  workspaceRelativePath: "",
+                };
+                commandResult = {
+                  ok: false,
+                  message: error instanceof Error ? error.message : "Unknown project start request error.",
+                };
+              }
+
+              try {
+                await sendStartProjectAcknowledgement(config, startProjectRequest, commandResult);
+              } catch (error) {
+                const sendMessage = buildStepFailureMessage("send-start-project-ack", error);
+                console.error(`Discord project start acknowledgement failed: ${sendMessage}`);
+                logDiscordMissingAccessHint(sendMessage);
+              }
+            }
           }
         }
-        continue;
       }
 
-      const requestedProjectName = parseStartProjectName(message.content);
-      if (requestedProjectName === null || !handlers.onStartProject) {
-        continue;
-      }
-
-      const recordedReceipt = await recordDiscordControlCommandReceipt(workDir, {
-        command: "start-project",
-        messageId: message.id,
-      });
-      if (!recordedReceipt) {
-        continue;
-      }
-
-      let startProjectRequest: StartProjectCommandRequest | null = null;
-      let commandResult: StartProjectCommandResult;
-
-      try {
-        const normalized = normalizeProjectNameInput(requestedProjectName);
-        startProjectRequest = {
-          messageId: message.id,
-          requestedAt: new Date().toISOString(),
-          requestedBy: `discord:${config.operatorUserId}`,
-          displayName: normalized.displayName,
-          slug: normalized.slug,
-          repositoryName: normalized.repositoryName,
-          issueLabel: normalized.issueLabel,
-          workspaceRelativePath: normalized.workspaceRelativePath,
-        };
-        commandResult = await handlers.onStartProject(startProjectRequest);
-      } catch (error) {
-        const fallbackDisplayName = requestedProjectName.trim() || "<missing project name>";
-        startProjectRequest = {
-          messageId: message.id,
-          requestedAt: new Date().toISOString(),
-          requestedBy: `discord:${config.operatorUserId}`,
-          displayName: fallbackDisplayName,
-          slug: "",
-          repositoryName: "",
-          issueLabel: "",
-          workspaceRelativePath: "",
-        };
-        commandResult = {
-          ok: false,
-          message: error instanceof Error ? error.message : "Unknown project start request error.",
-        };
-      }
-
-      try {
-        await sendStartProjectAcknowledgement(config, startProjectRequest, commandResult);
-      } catch (error) {
-        const sendMessage = buildStepFailureMessage("send-start-project-ack", error);
-        console.error(`Discord project start acknowledgement failed: ${sendMessage}`);
-        logDiscordMissingAccessHint(sendMessage);
-      }
+      await writeDiscordControlCursor(workDir, message.id);
     }
 
     return gracefulShutdownRequest;
