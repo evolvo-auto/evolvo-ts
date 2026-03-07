@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { buildProjectIssueLabel, DEFAULT_PROJECT_SLUG } from "./projectNaming.js";
 
 const EVOLVO_DIRECTORY_NAME = ".evolvo";
@@ -68,6 +68,31 @@ function normalizeNullableString(value: unknown): string | null {
 
 function buildRepositoryUrl(owner: string, repo: string): string {
   return `https://github.com/${owner}/${repo}`;
+}
+
+function buildProjectRegistry(defaultProject: DefaultProjectContext, projects: ProjectRecord[]): ProjectRegistry {
+  return {
+    version: PROJECT_REGISTRY_VERSION,
+    projects: ensureDefaultProject(projects, defaultProject),
+  };
+}
+
+function buildCorruptProjectRegistryPath(registryPath: string, atMs = Date.now()): string {
+  const extension = extname(registryPath);
+  const fileName = basename(registryPath, extension);
+  return join(
+    dirname(registryPath),
+    `${fileName}.corrupt-${Math.max(0, Math.floor(atMs))}${extension}`,
+  );
+}
+
+function buildProjectRegistryTempPath(registryPath: string, atMs = Date.now()): string {
+  const extension = extname(registryPath);
+  const fileName = basename(registryPath, extension);
+  return join(
+    dirname(registryPath),
+    `${fileName}.tmp-${Math.max(0, Math.floor(atMs))}-${process.pid}${extension}`,
+  );
 }
 
 export function getProjectRegistryPath(workDir: string): string {
@@ -213,49 +238,102 @@ function ensureDefaultProject(
   ];
 }
 
+type ParsedProjectRegistryResult =
+  | {
+    ok: true;
+    registry: ProjectRegistry;
+  }
+  | {
+    ok: false;
+    recoveryRegistry: ProjectRegistry;
+  };
+
+function parseProjectRegistry(
+  raw: string,
+  defaultProject: DefaultProjectContext,
+): ParsedProjectRegistryResult {
+  const parsed = JSON.parse(raw) as unknown;
+  const rawProjects = (parsed as { projects?: unknown }).projects;
+  if (!Array.isArray(rawProjects)) {
+    return {
+      ok: false,
+      recoveryRegistry: buildProjectRegistry(defaultProject, []),
+    };
+  }
+
+  const normalizedProjects = rawProjects.map(normalizeProjectRecord);
+  const validProjects = normalizedProjects.filter((project) => project !== null) as ProjectRecord[];
+  if (validProjects.length !== rawProjects.length) {
+    return {
+      ok: false,
+      recoveryRegistry: buildProjectRegistry(defaultProject, validProjects),
+    };
+  }
+
+  return {
+    ok: true,
+    registry: buildProjectRegistry(defaultProject, validProjects),
+  };
+}
+
+async function recoverMalformedProjectRegistry(
+  registryPath: string,
+  recoveryRegistry: ProjectRegistry,
+): Promise<ProjectRegistry> {
+  const corruptPath = buildCorruptProjectRegistryPath(registryPath);
+  await fs.rename(registryPath, corruptPath);
+  await writeProjectRegistryFile(registryPath, recoveryRegistry);
+  console.warn(
+    `Recovered malformed project registry at ${registryPath}; preserved corrupt file at ${corruptPath}.`,
+  );
+  return recoveryRegistry;
+}
+
 export async function readProjectRegistry(
   workDir: string,
   defaultProject: DefaultProjectContext,
 ): Promise<ProjectRegistry> {
+  const registryPath = getProjectRegistryPath(workDir);
   try {
-    const raw = await fs.readFile(getProjectRegistryPath(workDir), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    const rawProjects = (parsed as { projects?: unknown }).projects;
-    if (!Array.isArray(rawProjects)) {
-      throw new Error("Project registry file is malformed: missing projects array.");
+    const raw = await fs.readFile(registryPath, "utf8");
+    const parsed = parseProjectRegistry(raw, defaultProject);
+    if (!parsed.ok) {
+      return recoverMalformedProjectRegistry(registryPath, parsed.recoveryRegistry);
     }
 
-    const normalizedProjects = rawProjects.map(normalizeProjectRecord);
-    if (normalizedProjects.some((project) => project === null)) {
-      throw new Error("Project registry file is malformed: invalid project record.");
-    }
-    const existingProjects = normalizedProjects as ProjectRecord[];
-
-    return {
-      version: PROJECT_REGISTRY_VERSION,
-      projects: ensureDefaultProject(existingProjects, defaultProject),
-    };
+    return parsed.registry;
   } catch (error) {
     const errorCode = (error as NodeJS.ErrnoException).code;
     if (errorCode === "ENOENT") {
-      return {
-        version: PROJECT_REGISTRY_VERSION,
-        projects: [buildDefaultProjectRecord(defaultProject)],
-      };
+      return buildProjectRegistry(defaultProject, []);
+    }
+
+    if (error instanceof SyntaxError) {
+      return recoverMalformedProjectRegistry(registryPath, buildProjectRegistry(defaultProject, []));
     }
 
     throw error;
   }
 }
 
-export async function writeProjectRegistry(workDir: string, registry: ProjectRegistry): Promise<void> {
-  const path = getProjectRegistryPath(workDir);
+async function writeProjectRegistryFile(path: string, registry: ProjectRegistry): Promise<void> {
   await fs.mkdir(dirname(path), { recursive: true });
-  await fs.writeFile(
-    path,
-    `${JSON.stringify({ version: PROJECT_REGISTRY_VERSION, projects: registry.projects }, null, 2)}\n`,
-    "utf8",
-  );
+  const tempPath = buildProjectRegistryTempPath(path);
+  try {
+    await fs.writeFile(
+      tempPath,
+      `${JSON.stringify({ version: PROJECT_REGISTRY_VERSION, projects: registry.projects }, null, 2)}\n`,
+      "utf8",
+    );
+    await fs.rename(tempPath, path);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function writeProjectRegistry(workDir: string, registry: ProjectRegistry): Promise<void> {
+  await writeProjectRegistryFile(getProjectRegistryPath(workDir), registry);
 }
 
 export async function ensureProjectRegistry(

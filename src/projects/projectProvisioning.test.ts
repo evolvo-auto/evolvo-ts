@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,7 @@ describe("projectProvisioning", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.useRealTimers();
     await Promise.all(tempDirs.map((directory) => rm(directory, { recursive: true, force: true })));
     vi.restoreAllMocks();
   });
@@ -196,6 +197,61 @@ describe("projectProvisioning", () => {
       }),
     );
     expect(issueManager.createIssue).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers a malformed registry before creating a provisioning request issue", async () => {
+    vi.useFakeTimers();
+    const recoveryAtMs = new Date("2026-03-07T23:30:00.000Z").getTime();
+    vi.setSystemTime(recoveryAtMs);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const registryPath = getProjectRegistryPath(workDir);
+    const corruptPath = join(workDir, ".evolvo", `projects.corrupt-${recoveryAtMs}.json`);
+    await mkdir(join(workDir, ".evolvo"), { recursive: true });
+    await writeFile(registryPath, "{\"projects\":", "utf8");
+    const issueManager = {
+      listOpenIssues: vi.fn().mockResolvedValue([]),
+      createIssue: vi.fn().mockResolvedValue({
+        ok: true,
+        message: "Created issue #404.",
+        issue: {
+          number: 404,
+          title: "Start project Habit CLI",
+          description: "body",
+          state: "open",
+          labels: [],
+        },
+      }),
+    };
+
+    const result = await createProjectProvisioningRequestIssue({
+      issueManager,
+      workDir,
+      trackerOwner: "evolvo-auto",
+      trackerRepo: "evolvo-ts",
+      projectName: "Habit CLI",
+      requestedBy: "discord:operator-1",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        issueNumber: 404,
+      }),
+    );
+    expect(await readFile(corruptPath, "utf8")).toBe("{\"projects\":");
+    expect(JSON.parse(await readFile(registryPath, "utf8"))).toEqual({
+      version: 1,
+      projects: [
+        expect.objectContaining({
+          slug: "evolvo",
+        }),
+      ],
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      `Recovered malformed project registry at ${registryPath}; preserved corrupt file at ${corruptPath}.`,
+    );
   });
 
   it("provisions a managed project and records active registry state on success", async () => {
