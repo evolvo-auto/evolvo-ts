@@ -434,4 +434,25 @@ describe("main replenishment integration", () => {
       "Issue #100: Bootstrap issue A (follow-up 2)\n\nfrom startup analysis\n\nFollow-up: address remaining gaps discovered after earlier work.",
     );
   });
+
+  it("falls back to default startup templates and still continues selection when analysis fails", async () => {
+    resetMockApiStateToEmptyQueue();
+    generateStartupIssueTemplatesMock.mockRejectedValueOnce(new Error("analysis unavailable"));
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(console.error).toHaveBeenCalledWith("Startup repository analysis failed: analysis unavailable");
+    expect(console.error).toHaveBeenCalledWith(
+      "Startup issue bootstrap is falling back to default issue templates (targetCount=3).",
+    );
+    expect(mockApiState.createdIssueTitles).toHaveLength(3);
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 1 queue health: open=0 selected=none queueAction=bootstrap created=3 outcome=continue",
+    );
+    expect(console.log).toHaveBeenCalledWith("Cycle 2 queue health: open=3 selected=#100");
+    expect(runCodingAgentMock).toHaveBeenCalledTimes(2);
+    expect(console.log).not.toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
+  });
 });
