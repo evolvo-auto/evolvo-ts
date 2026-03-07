@@ -430,6 +430,7 @@ describe("main", () => {
         { title: "Startup issue 3", description: "from repo analysis" },
       ],
     });
+    expect(console.error).toHaveBeenCalledWith("Startup bootstrap created 0 issues from 3 repository-derived template(s).");
     expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:0");
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
   });
@@ -450,8 +451,27 @@ describe("main", () => {
     await main();
 
     expect(console.error).toHaveBeenCalledWith("Startup repository analysis failed: analysis boom");
+    expect(console.error).toHaveBeenCalledWith("Startup issue bootstrap is falling back to default issue templates.");
     expect(replenishSelfImprovementIssuesMock).toHaveBeenCalledWith({ minimumIssueCount: 3, maximumOpenIssues: 5 });
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #30: Fallback issue\n\nfallback");
+  });
+
+  it("logs actionable startup diagnostics when fallback issue creation also fails", async () => {
+    generateStartupIssueTemplatesMock.mockRejectedValueOnce(new Error("analysis boom"));
+    replenishSelfImprovementIssuesMock.mockRejectedValueOnce(new Error("issue create denied"));
+    const { DEFAULT_PROMPT, main } = await import("./main.js");
+
+    await main();
+
+    expect(console.error).toHaveBeenCalledWith("Startup repository analysis failed: analysis boom");
+    expect(console.error).toHaveBeenCalledWith("Startup issue bootstrap is falling back to default issue templates.");
+    expect(console.error).toHaveBeenCalledWith("Startup fallback issue creation failed: issue create denied");
+    expect(console.error).toHaveBeenCalledWith(
+      "Startup issue queue remains empty. Recovery: verify GitHub token permissions and repository issue settings, then rerun.",
+    );
+    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:0");
+    expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(runCodingAgentMock).not.toHaveBeenCalled();
   });
 
   it("closes outdated issues before selecting work", async () => {

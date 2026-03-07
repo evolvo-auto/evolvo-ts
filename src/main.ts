@@ -483,13 +483,20 @@ function logCreatedIssues(issues: IssueSummary[]): void {
 }
 
 async function bootstrapStartupIssues(issueManager: TaskIssueManager): Promise<IssueSummary[]> {
+  const targetCount = MIN_REPLENISH_ISSUES;
   try {
-    const templates = await generateStartupIssueTemplates(WORK_DIR, { targetCount: MIN_REPLENISH_ISSUES });
+    const templates = await generateStartupIssueTemplates(WORK_DIR, { targetCount });
     const replenishment = await issueManager.replenishSelfImprovementIssues({
-      minimumIssueCount: MIN_REPLENISH_ISSUES,
+      minimumIssueCount: targetCount,
       maximumOpenIssues: MAX_OPEN_ISSUES,
       templates,
     });
+
+    if (replenishment.created.length === 0) {
+      console.error(
+        `Startup bootstrap created 0 issues from ${templates.length} repository-derived template(s).`,
+      );
+    }
 
     return replenishment.created;
   } catch (error) {
@@ -499,12 +506,33 @@ async function bootstrapStartupIssues(issueManager: TaskIssueManager): Promise<I
       console.error("Startup repository analysis failed with an unknown error.");
     }
 
-    const replenishment = await issueManager.replenishSelfImprovementIssues({
-      minimumIssueCount: MIN_REPLENISH_ISSUES,
-      maximumOpenIssues: MAX_OPEN_ISSUES,
-    });
+    console.error("Startup issue bootstrap is falling back to default issue templates.");
 
-    return replenishment.created;
+    try {
+      const replenishment = await issueManager.replenishSelfImprovementIssues({
+        minimumIssueCount: targetCount,
+        maximumOpenIssues: MAX_OPEN_ISSUES,
+      });
+
+      if (replenishment.created.length === 0) {
+        console.error(
+          "Startup fallback issue creation created 0 issues. Recovery: verify issue creation permissions and rerun.",
+        );
+      }
+
+      return replenishment.created;
+    } catch (fallbackError) {
+      if (fallbackError instanceof Error) {
+        console.error(`Startup fallback issue creation failed: ${fallbackError.message}`);
+      } else {
+        console.error("Startup fallback issue creation failed with an unknown error.");
+      }
+
+      console.error(
+        "Startup issue queue remains empty. Recovery: verify GitHub token permissions and repository issue settings, then rerun.",
+      );
+      return [];
+    }
   }
 }
 
