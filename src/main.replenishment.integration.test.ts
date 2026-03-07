@@ -288,7 +288,9 @@ describe("main replenishment integration", () => {
     await main();
 
     expect(mockApiState.createdIssueTitles).toHaveLength(3);
-    expect(console.log).toHaveBeenCalledWith("Cycle 2 queue health: open=0 selected=none queueAction=replenish:3");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 2 queue health: open=0 selected=none queueAction=replenish created=3 outcome=continue",
+    );
     expect(runCodingAgentMock).toHaveBeenCalledTimes(2);
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(1, "Issue #10: Initial work item\n\nfirst pass");
     const secondPrompt = runCodingAgentMock.mock.calls[1]?.[0];
@@ -322,7 +324,9 @@ describe("main replenishment integration", () => {
 
     await main();
 
-    expect(console.log).toHaveBeenCalledWith("Cycle 2 queue health: open=0 selected=none queueAction=replenish:3");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 2 queue health: open=0 selected=none queueAction=replenish created=3 outcome=continue",
+    );
     expect(runCodingAgentMock).toHaveBeenCalledTimes(2);
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(1, "Issue #10: Initial work item\n\nfirst pass");
     const secondPrompt = runCodingAgentMock.mock.calls[1]?.[0];
@@ -358,7 +362,9 @@ describe("main replenishment integration", () => {
       "Bootstrap issue B",
       "Bootstrap issue C",
     ]);
-    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:3");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 1 queue health: open=0 selected=none queueAction=bootstrap created=3 outcome=continue",
+    );
     expect(console.log).toHaveBeenCalledWith(
       "No open issues found on startup. Bootstrapped issue queue from repository analysis.",
     );
@@ -388,7 +394,9 @@ describe("main replenishment integration", () => {
       "Bootstrap issue B",
       "Bootstrap issue C",
     ]);
-    expect(console.log).toHaveBeenCalledWith("Cycle 1 queue health: open=0 selected=none queueAction=bootstrap:3");
+    expect(console.log).toHaveBeenCalledWith(
+      "Cycle 1 queue health: open=0 selected=none queueAction=bootstrap created=3 outcome=continue",
+    );
     expect(console.log).toHaveBeenCalledWith("Cycle 2 queue health: open=3 selected=#100");
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(
       1,
