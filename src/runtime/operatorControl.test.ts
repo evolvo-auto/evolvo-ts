@@ -477,6 +477,7 @@ describe("operatorControl", () => {
       mode: "after-current-task",
       messageId: "7001",
       requestedAt: expect.any(String),
+      enforcedAt: null,
     });
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     expect(fetchSpy).toHaveBeenNthCalledWith(
@@ -521,6 +522,7 @@ describe("operatorControl", () => {
       mode: "after-tasks",
       messageId: "7051",
       requestedAt: expect.any(String),
+      enforcedAt: null,
     });
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     expect(fetchSpy).toHaveBeenNthCalledWith(
@@ -569,6 +571,7 @@ describe("operatorControl", () => {
       mode: "after-current-task",
       messageId: "7061",
       requestedAt: expect.any(String),
+      enforcedAt: null,
     });
     expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("7061");
     expect(fetchSpy).toHaveBeenNthCalledWith(
@@ -618,6 +621,7 @@ describe("operatorControl", () => {
       mode: "after-current-task",
       messageId: "9058",
       requestedAt: expect.any(String),
+      enforcedAt: null,
     });
     expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("9060");
     expect(fetchSpy).toHaveBeenNthCalledWith(
@@ -694,6 +698,7 @@ describe("operatorControl", () => {
       mode: "after-current-task",
       messageId: "9401",
       requestedAt: expect.any(String),
+      enforcedAt: null,
     });
     expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("9402");
     expect(onStartProject).toHaveBeenCalledTimes(1);

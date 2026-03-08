@@ -17,6 +17,7 @@ export type GracefulShutdownRequest = {
   mode: GracefulShutdownMode;
   messageId: string;
   requestedAt: string;
+  enforcedAt: string | null;
 };
 
 type DiscordControlCursorState = {
@@ -65,6 +66,7 @@ function normalizeGracefulShutdownRequest(raw: unknown): GracefulShutdownRequest
   if (requestedAt === null) {
     return null;
   }
+  const enforcedAt = isNonEmptyString(candidate.enforcedAt) ? candidate.enforcedAt.trim() : null;
 
   return {
     version: GRACEFUL_SHUTDOWN_REQUEST_VERSION,
@@ -73,6 +75,7 @@ function normalizeGracefulShutdownRequest(raw: unknown): GracefulShutdownRequest
     mode,
     messageId,
     requestedAt,
+    enforcedAt,
   };
 }
 
@@ -212,9 +215,41 @@ export async function recordGracefulShutdownRequest(
     mode,
     messageId,
     requestedAt,
+    enforcedAt: null,
   };
   await writeJsonFile(getGracefulShutdownRequestPath(workDir), request);
   return { request, created: true };
+}
+
+export async function markGracefulShutdownRequestEnforced(
+  workDir: string,
+  input: {
+    enforcedAt?: string;
+  } = {},
+): Promise<{ request: GracefulShutdownRequest; updated: boolean } | null> {
+  const request = await readGracefulShutdownRequest(workDir);
+  if (request === null) {
+    return null;
+  }
+
+  if (request.enforcedAt !== null) {
+    return {
+      request,
+      updated: false,
+    };
+  }
+
+  const nextRequest: GracefulShutdownRequest = {
+    ...request,
+    enforcedAt: isNonEmptyString(input.enforcedAt)
+      ? input.enforcedAt.trim()
+      : new Date().toISOString(),
+  };
+  await writeJsonFile(getGracefulShutdownRequestPath(workDir), nextRequest);
+  return {
+    request: nextRequest,
+    updated: true,
+  };
 }
 
 export async function clearGracefulShutdownRequest(workDir: string): Promise<void> {

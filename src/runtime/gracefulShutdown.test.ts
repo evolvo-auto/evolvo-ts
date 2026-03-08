@@ -6,6 +6,7 @@ import {
   consumeGracefulShutdownRequest,
   getDiscordControlCursorPath,
   getGracefulShutdownRequestPath,
+  markGracefulShutdownRequestEnforced,
   readDiscordControlCursor,
   readGracefulShutdownRequest,
   recordDiscordControlCommandReceipt,
@@ -48,6 +49,7 @@ describe("gracefulShutdown", () => {
         mode: "after-current-task",
         messageId: "9001",
         requestedAt: "2026-03-07T12:00:00.000Z",
+        enforcedAt: null,
       },
     });
     expect(second).toEqual({
@@ -73,6 +75,7 @@ describe("gracefulShutdown", () => {
       mode: "after-current-task",
       messageId: "9010",
       requestedAt: "2026-03-07T13:00:00.000Z",
+      enforcedAt: null,
     });
     await expect(consumeGracefulShutdownRequest(workDir)).resolves.toBeNull();
   });
@@ -96,9 +99,46 @@ describe("gracefulShutdown", () => {
         mode: "after-tasks",
         messageId: "9050",
         requestedAt: "2026-03-07T13:30:00.000Z",
+        enforcedAt: null,
       },
     });
     await expect(readGracefulShutdownRequest(workDir)).resolves.toEqual(result.request);
+  });
+
+  it("marks graceful shutdown requests as enforced without clearing them", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+
+    await recordGracefulShutdownRequest(workDir, {
+      messageId: "9055",
+      requestedAt: "2026-03-07T13:35:00.000Z",
+    });
+
+    await expect(
+      markGracefulShutdownRequestEnforced(workDir, {
+        enforcedAt: "2026-03-07T13:40:00.000Z",
+      }),
+    ).resolves.toEqual({
+      updated: true,
+      request: {
+        version: 1,
+        source: "discord",
+        command: "/quit",
+        mode: "after-current-task",
+        messageId: "9055",
+        requestedAt: "2026-03-07T13:35:00.000Z",
+        enforcedAt: "2026-03-07T13:40:00.000Z",
+      },
+    });
+    await expect(readGracefulShutdownRequest(workDir)).resolves.toEqual({
+      version: 1,
+      source: "discord",
+      command: "/quit",
+      mode: "after-current-task",
+      messageId: "9055",
+      requestedAt: "2026-03-07T13:35:00.000Z",
+      enforcedAt: "2026-03-07T13:40:00.000Z",
+    });
   });
 
   it("preserves malformed Discord control cursor state and rewrites a recoverable default", async () => {
@@ -169,6 +209,7 @@ describe("gracefulShutdown", () => {
       mode: "after-current-task",
       messageId: "9200",
       requestedAt: "2026-03-07T15:00:00.000Z",
+      enforcedAt: null,
     });
   });
 
@@ -197,6 +238,7 @@ describe("gracefulShutdown", () => {
         mode: "after-current-task",
         messageId: "9300",
         requestedAt: "2026-03-07T17:00:00.000Z",
+        enforcedAt: null,
       },
     });
     expect((await readdir(evolvoDir)).sort()).toEqual([

@@ -32,7 +32,7 @@ const pollDiscordGracefulShutdownCommandMock = vi.fn();
 const startDiscordGracefulShutdownListenerMock = vi.fn();
 const stopDiscordGracefulShutdownListenerMock = vi.fn();
 const readGracefulShutdownRequestMock = vi.fn();
-const clearGracefulShutdownRequestMock = vi.fn();
+const markGracefulShutdownRequestEnforcedMock = vi.fn();
 const tryResolveRepositoryDefaultBranchMock = vi.fn();
 const configureCodingAgentExecutionContextMock = vi.fn();
 const ensureProjectRegistryMock = vi.fn();
@@ -156,8 +156,8 @@ vi.mock("./runtime/runtimeReadiness.js", () => ({
 }));
 
 vi.mock("./runtime/gracefulShutdown.js", () => ({
+  markGracefulShutdownRequestEnforced: markGracefulShutdownRequestEnforcedMock,
   readGracefulShutdownRequest: readGracefulShutdownRequestMock,
-  clearGracefulShutdownRequest: clearGracefulShutdownRequestMock,
 }));
 
 vi.mock("./runtime/operatorControl.js", () => ({
@@ -430,8 +430,19 @@ describe("main", () => {
     writeRuntimeReadinessSignalMock.mockResolvedValue("/tmp/evolvo/.evolvo/runtime-readiness.json");
     readGracefulShutdownRequestMock.mockReset();
     readGracefulShutdownRequestMock.mockResolvedValue(null);
-    clearGracefulShutdownRequestMock.mockReset();
-    clearGracefulShutdownRequestMock.mockResolvedValue(undefined);
+    markGracefulShutdownRequestEnforcedMock.mockReset();
+    markGracefulShutdownRequestEnforcedMock.mockImplementation(async () => {
+      const request = await readGracefulShutdownRequestMock();
+      return request === null
+        ? null
+        : {
+            updated: request.enforcedAt === null,
+            request: {
+              ...request,
+              enforcedAt: request.enforcedAt ?? "2026-03-07T12:30:00.000Z",
+            },
+          };
+    });
     pollDiscordGracefulShutdownCommandMock.mockReset();
     pollDiscordGracefulShutdownCommandMock.mockResolvedValue(null);
     requestCycleLimitDecisionFromOperatorMock.mockReset();
@@ -1595,6 +1606,7 @@ describe("main", () => {
       mode: "after-current-task",
       messageId: "9001",
       requestedAt: "2026-03-07T12:00:00.000Z",
+      enforcedAt: null,
     });
     const { main } = await import("./main.js");
 
@@ -1602,9 +1614,9 @@ describe("main", () => {
 
     expect(listOpenIssuesMock).not.toHaveBeenCalled();
     expect(runCodingAgentMock).not.toHaveBeenCalled();
-    expect(clearGracefulShutdownRequestMock).toHaveBeenCalledTimes(1);
+    expect(markGracefulShutdownRequestEnforcedMock).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
-      "Graceful shutdown requested via Discord /quit. Stopping before starting a new task.",
+      "Graceful shutdown requested via Discord /quit. Stopping before starting a new task. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
     );
   });
 
@@ -1627,6 +1639,7 @@ describe("main", () => {
         mode: "after-current-task",
         messageId: "9002",
         requestedAt: "2026-03-07T12:05:00.000Z",
+        enforcedAt: null,
       });
     const { main } = await import("./main.js");
 
@@ -1636,9 +1649,9 @@ describe("main", () => {
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #301: Current task\n\nfinish this");
     expect(markInProgressMock).toHaveBeenCalledWith(301);
     expect(markInProgressMock).not.toHaveBeenCalledWith(302);
-    expect(clearGracefulShutdownRequestMock).toHaveBeenCalledTimes(1);
+    expect(markGracefulShutdownRequestEnforcedMock).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
-      "Graceful shutdown requested via Discord /quit. Current task completed. Stopping before starting another issue.",
+      "Graceful shutdown requested via Discord /quit. Current task completed. Stopping before starting another issue. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
     );
   });
 
@@ -1659,6 +1672,7 @@ describe("main", () => {
       mode: "after-tasks",
       messageId: "9010",
       requestedAt: "2026-03-07T12:10:00.000Z",
+      enforcedAt: null,
     });
     const { main } = await import("./main.js");
 
@@ -1668,9 +1682,31 @@ describe("main", () => {
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(1, "Issue #401: First queued task\n\none");
     expect(runCodingAgentMock).toHaveBeenNthCalledWith(2, "Issue #402: Second queued task\n\ntwo");
     expect(runPlannerAgentMock).not.toHaveBeenCalled();
-    expect(clearGracefulShutdownRequestMock).toHaveBeenCalledTimes(1);
+    expect(markGracefulShutdownRequestEnforcedMock).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
-      "Graceful shutdown requested via Discord /quit after tasks. Queue-drain shutdown is active. Planning and replenishment are disabled, so no new work will be started.",
+      "Graceful shutdown requested via Discord /quit after tasks. Queue-drain shutdown is active. Planning and replenishment are disabled, so no new work will be started. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
+    );
+  });
+
+  it("keeps honoring an already-enforced queue-drain shutdown request after restart", async () => {
+    readGracefulShutdownRequestMock.mockResolvedValue({
+      version: 1,
+      source: "discord",
+      command: "/quit after tasks",
+      mode: "after-tasks",
+      messageId: "9011",
+      requestedAt: "2026-03-07T12:15:00.000Z",
+      enforcedAt: "2026-03-07T12:20:00.000Z",
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(listOpenIssuesMock).not.toHaveBeenCalled();
+    expect(runCodingAgentMock).not.toHaveBeenCalled();
+    expect(markGracefulShutdownRequestEnforcedMock).toHaveBeenCalledTimes(1);
+    expect(console.log).toHaveBeenCalledWith(
+      "Graceful shutdown requested via Discord /quit after tasks. Stopping before starting a new task. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
     );
   });
 

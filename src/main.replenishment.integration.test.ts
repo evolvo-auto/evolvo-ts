@@ -1,3 +1,4 @@
+import { promises as fs } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runCodingAgentMock = vi.fn();
@@ -19,6 +20,23 @@ const tryResolveRepositoryDefaultBranchMock = vi.fn();
 const ensureProjectRegistryMock = vi.fn();
 const resolveProjectExecutionContextForIssueMock = vi.fn();
 const buildProjectRoutingBlockedCommentMock = vi.fn();
+
+const TEST_WORK_DIR = "/tmp/evolvo";
+const TEST_STATE_DIR = `${TEST_WORK_DIR}/.evolvo`;
+const DISABLED_OPERATOR_ENV_KEYS = [
+  "DISCORD_BOT_TOKEN",
+  "DISCORD_CONTROL_GUILD_ID",
+  "DISCORD_CONTROL_CHANNEL_ID",
+  "DISCORD_OPERATOR_USER_ID",
+  "DISCORD_OPERATOR_TIMEOUT_MS",
+  "DISCORD_OPERATOR_POLL_INTERVAL_MS",
+  "DISCORD_CYCLE_EXTENSION",
+  "EVOLVO_RESTART_TOKEN",
+  "EVOLVO_READINESS_FILE",
+] as const;
+const originalOperatorEnv = new Map(
+  DISABLED_OPERATOR_ENV_KEYS.map((key) => [key, process.env[key]]),
+);
 
 type MockIssue = {
   number: number;
@@ -89,6 +107,29 @@ function parseIssueNumberFromPath(path: string): number {
   }
 
   return Number(match[1]);
+}
+
+async function resetRuntimeState(): Promise<void> {
+  await fs.mkdir(TEST_WORK_DIR, { recursive: true });
+  await fs.rm(TEST_STATE_DIR, { recursive: true, force: true });
+}
+
+function disableOperatorEnv(): void {
+  for (const key of DISABLED_OPERATOR_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
+function restoreOperatorEnv(): void {
+  for (const key of DISABLED_OPERATOR_ENV_KEYS) {
+    const value = originalOperatorEnv.get(key);
+    if (typeof value === "string") {
+      process.env[key] = value;
+      continue;
+    }
+
+    delete process.env[key];
+  }
 }
 
 vi.mock("./environment.js", () => ({
@@ -247,8 +288,10 @@ vi.mock("./github/githubClient.js", async () => {
 describe("main replenishment integration", () => {
   const originalArgv = process.argv;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
+    await resetRuntimeState();
+    disableOperatorEnv();
     resetMockApiState();
     runIssueCommandMock.mockReset();
     runIssueCommandMock.mockResolvedValue(false);
@@ -449,9 +492,11 @@ describe("main replenishment integration", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     process.argv = originalArgv;
     vi.restoreAllMocks();
+    restoreOperatorEnv();
+    await resetRuntimeState();
   });
 
   it("replenishes a drained queue by creating issues and continues processing", async () => {

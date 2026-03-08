@@ -32,7 +32,7 @@ import {
   waitForRunLoopRetry,
 } from "./runtime/loopUtils.js";
 import {
-  clearGracefulShutdownRequest,
+  markGracefulShutdownRequestEnforced,
   readGracefulShutdownRequest,
   type GracefulShutdownRequest,
 } from "./runtime/gracefulShutdown.js";
@@ -178,11 +178,15 @@ function buildGracefulShutdownLogMessage(
   request: GracefulShutdownRequest,
   reason: string,
 ): string {
-  return `Graceful shutdown requested via Discord ${request.command}. ${reason}`;
+  return `Graceful shutdown requested via Discord ${request.command}. ${reason} Shutdown intent remains persisted so later restarts do not resume work unexpectedly.`;
 }
 
 function isQueueDrainGracefulShutdownRequest(request: GracefulShutdownRequest | null): boolean {
   return request?.mode === "after-tasks";
+}
+
+function isEnforcedGracefulShutdownRequest(request: GracefulShutdownRequest | null): boolean {
+  return request?.enforcedAt !== null;
 }
 
 async function readPendingGracefulShutdownRequest(
@@ -199,12 +203,16 @@ async function stopIfSingleTaskGracefulShutdownRequested(
   discordHandlers: DiscordControlHandlers,
 ): Promise<boolean> {
   const request = await readPendingGracefulShutdownRequest(workDir, discordHandlers);
-  if (request === null || isQueueDrainGracefulShutdownRequest(request)) {
+  if (request === null) {
     return false;
   }
 
-  await clearGracefulShutdownRequest(workDir);
-  console.log(buildGracefulShutdownLogMessage(request, reason));
+  if (isQueueDrainGracefulShutdownRequest(request) && !isEnforcedGracefulShutdownRequest(request)) {
+    return false;
+  }
+
+  const enforced = await markGracefulShutdownRequestEnforced(workDir);
+  console.log(buildGracefulShutdownLogMessage(enforced?.request ?? request, reason));
   return true;
 }
 
@@ -218,11 +226,11 @@ async function stopIfGracefulShutdownPreventsNewWork(
     return false;
   }
 
-  await clearGracefulShutdownRequest(workDir);
+  const enforced = await markGracefulShutdownRequestEnforced(workDir);
   const shutdownReason = isQueueDrainGracefulShutdownRequest(request)
     ? "Queue-drain shutdown is active. Planning and replenishment are disabled, so no new work will be started."
     : reason;
-  console.log(buildGracefulShutdownLogMessage(request, shutdownReason));
+  console.log(buildGracefulShutdownLogMessage(enforced?.request ?? request, shutdownReason));
   return true;
 }
 
