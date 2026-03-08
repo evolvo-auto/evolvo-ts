@@ -29,6 +29,7 @@ const resolveProjectExecutionContextForIssueMock = vi.fn();
 const buildProjectRoutingBlockedCommentMock = vi.fn();
 const buildUnifiedIssueQueueMock = vi.fn();
 const selectIssueForWorkWithOpenAiMock = vi.fn();
+const ensureProjectBoardsForRegistryMock = vi.fn();
 
 const TEST_WORK_DIR = "/tmp/evolvo";
 const TEST_STATE_DIR = `${TEST_WORK_DIR}/.evolvo`;
@@ -216,6 +217,10 @@ vi.mock("./runtime/runtimeReadiness.js", () => ({
   writeRuntimeReadinessSignal: writeRuntimeReadinessSignalMock,
 }));
 
+vi.mock("./projects/projectBoards.js", () => ({
+  ensureProjectBoardsForRegistry: ensureProjectBoardsForRegistryMock,
+}));
+
 vi.mock("./projects/projectRegistry.js", () => ({
   buildDefaultProjectContext: (context: {
     owner: string;
@@ -369,6 +374,14 @@ describe("main replenishment integration", () => {
     runCodingAgentMock.mockReset();
     configureCodingAgentExecutionContextMock.mockReset();
     configureCodingAgentExecutionContextMock.mockImplementation(() => undefined);
+    ensureProjectBoardsForRegistryMock.mockReset();
+    ensureProjectBoardsForRegistryMock.mockResolvedValue({
+      registry: {
+        version: 1,
+        projects: [],
+      },
+      results: [],
+    });
     runPlannerAgentMock.mockReset();
     generateStartupIssueTemplatesMock.mockReset();
     generateStartupIssueTemplatesMock.mockResolvedValue([]);

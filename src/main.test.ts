@@ -57,6 +57,7 @@ const executeProjectProvisioningIssueMock = vi.fn();
 const isProjectProvisioningRequestIssueMock = vi.fn();
 const buildProjectProvisioningOutcomeCommentMock = vi.fn();
 const buildProjectProvisioningCompletionSummaryMock = vi.fn();
+const ensureProjectBoardsForRegistryMock = vi.fn();
 const buildUnifiedIssueQueueMock = vi.fn();
 const selectIssueForWorkWithOpenAiMock = vi.fn();
 
@@ -194,6 +195,10 @@ vi.mock("./projects/projectProvisioning.js", () => ({
   executeProjectProvisioningIssue: executeProjectProvisioningIssueMock,
   handleStartProjectCommand: handleStartProjectCommandMock,
   isProjectProvisioningRequestIssue: isProjectProvisioningRequestIssueMock,
+}));
+
+vi.mock("./projects/projectBoards.js", () => ({
+  ensureProjectBoardsForRegistry: ensureProjectBoardsForRegistryMock,
 }));
 
 vi.mock("./projects/projectRegistry.js", () => ({
@@ -367,6 +372,11 @@ describe("main", () => {
     });
     runPostMergeSelfRestartMock.mockReset();
     runPostMergeSelfRestartMock.mockResolvedValue(undefined);
+    ensureProjectBoardsForRegistryMock.mockReset();
+    ensureProjectBoardsForRegistryMock.mockResolvedValue({
+      registry: { version: 1, projects: [DEFAULT_PROJECT_EXECUTION_CONTEXT.project] },
+      results: [],
+    });
     tryResolveRepositoryDefaultBranchMock.mockReset();
     tryResolveRepositoryDefaultBranchMock.mockResolvedValue("main");
     handleStartProjectCommandMock.mockReset();
@@ -1013,6 +1023,7 @@ describe("main", () => {
       trackerOwner: "owner",
       trackerRepo: "repo",
       adminClient: expect.any(Object),
+      boardsClient: expect.any(Object),
     });
     expect(runCodingAgentMock).not.toHaveBeenCalled();
     expect(addProgressCommentMock).toHaveBeenCalledWith(77, "## Project Provisioning");
