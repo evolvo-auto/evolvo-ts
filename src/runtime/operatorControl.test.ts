@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gracefulShutdown from "./gracefulShutdown.js";
 import {
   getDiscordControlConfigFromEnv,
+  notifyCycleLimitDecisionAppliedInDiscord,
   notifyIssueStartedInDiscord,
+  notifyRuntimeQuittingInDiscord,
   pollDiscordGracefulShutdownCommand,
   requestCycleLimitDecisionFromOperator,
   runDiscordOperatorControlStartupCheck,
@@ -447,6 +449,105 @@ describe("operatorControl", () => {
     });
   });
 
+  it("sends a Discord confirmation when a cycle-limit continue decision is applied", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const fetchSpy = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ id: "cycle-continue-1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await notifyCycleLimitDecisionAppliedInDiscord({
+      decision: "continue",
+      currentLimit: 5,
+      additionalCycles: 3,
+      newLimit: 8,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://discord.com/api/v10/channels/channel-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: "<@operator-1> Confirmed: continue was applied at the cycle limit.\nAdded 3 cycles. New limit: 8. Evolvo remains online.",
+        }),
+      }),
+    );
+  });
+
+  it("sends a Discord confirmation when a cycle-limit quit decision is applied", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const fetchSpy = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ id: "cycle-quit-1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await notifyCycleLimitDecisionAppliedInDiscord({
+      decision: "quit",
+      currentLimit: 5,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://discord.com/api/v10/channels/channel-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: "<@operator-1> Confirmed: quit was applied at the cycle limit (5).\nEvolvo is about to quit intentionally.",
+        }),
+      }),
+    );
+  });
+
+  it("sends a pre-quit Discord notification before intentional shutdown", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const fetchSpy = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ id: "quit-1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await notifyRuntimeQuittingInDiscord("Cycle limit of 5 was reached and no continue decision was applied.");
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://discord.com/api/v10/channels/channel-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: "<@operator-1> Evolvo is about to quit intentionally.\nReason: Cycle limit of 5 was reached and no continue decision was applied.\nRuntime shutdown is starting now.",
+        }),
+      }),
+    );
+  });
+
+  it("logs quit-notification failures clearly when Discord is unavailable", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const fetchSpy = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ message: "Missing Access", code: 50001 }),
+        { status: 403 },
+      ),
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await notifyRuntimeQuittingInDiscord("Post-merge restart workflow completed.");
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Discord runtime quit notification failed: [send-quit-message] Discord API request failed (403)"),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      "Discord bot is missing access to the configured control channel. Verify DISCORD_CONTROL_GUILD_ID, DISCORD_CONTROL_CHANNEL_ID, and bot channel permissions.",
+    );
+  });
+
   it("records and acknowledges an authorized /quit graceful shutdown command", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
@@ -486,7 +587,55 @@ describe("operatorControl", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          content: "<@operator-1> Graceful shutdown requested.\nEvolvo will finish the current task and then stop before starting another issue.",
+          content: "<@operator-1> Confirmed: `/quit` is now active.\nEvolvo will finish the current task and then stop before starting another issue.",
+        }),
+      }),
+    );
+  });
+
+  it("confirms the active shutdown plan when /quit is repeated after a queue-drain request already exists", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    await gracefulShutdown.recordGracefulShutdownRequest(workDir, {
+      messageId: "7999",
+      requestedAt: "2026-03-08T09:00:00.000Z",
+      mode: "after-tasks",
+    });
+    await gracefulShutdown.writeDiscordControlCursor(workDir, "7999");
+
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ id: "8000", content: "/quit", author: { id: "operator-1" } }]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-duplicate-quit" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const request = await pollDiscordGracefulShutdownCommand(workDir);
+
+    expect(request).toEqual({
+      version: 1,
+      source: "discord",
+      command: "/quit after tasks",
+      mode: "after-tasks",
+      messageId: "7999",
+      requestedAt: "2026-03-08T09:00:00.000Z",
+      enforcedAt: null,
+    });
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "https://discord.com/api/v10/channels/channel-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: "<@operator-1> Confirmed: `/quit after tasks` was already active, so the new command did not change the shutdown plan.\nEvolvo will finish the current actionable queue, will not plan or create new work, and will stop once the queue is drained.",
         }),
       }),
     );
@@ -531,7 +680,7 @@ describe("operatorControl", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          content: "<@operator-1> Queue-drain shutdown requested.\nEvolvo will finish the current actionable queue, will not plan or create new work, and will stop once the queue is drained.",
+          content: "<@operator-1> Confirmed: `/quit after tasks` is now active.\nEvolvo will finish the current actionable queue, will not plan or create new work, and will stop once the queue is drained.",
         }),
       }),
     );
@@ -702,7 +851,7 @@ describe("operatorControl", () => {
     });
     expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("9402");
     expect(onStartProject).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
   });
 
   it("queues an authorized /startProject request and acknowledges the created tracker issue", async () => {
