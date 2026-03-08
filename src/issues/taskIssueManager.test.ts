@@ -880,6 +880,55 @@ describe("TaskIssueManager", () => {
     });
   });
 
+  it("updates an issue title and description", async () => {
+    const client = createClientMock();
+    client.get.mockResolvedValue(createIssue());
+    client.patch.mockResolvedValue(createIssue({ title: "Updated", body: "Rewritten" }));
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.updateIssue(1, {
+      title: " Updated ",
+      description: " Rewritten ",
+    });
+
+    expect(client.patch).toHaveBeenCalledWith("/1", {
+      title: "Updated",
+      body: "Rewritten",
+    });
+    expect(result).toEqual({
+      ok: true,
+      message: "Issue #1 updated.",
+      issue: {
+        number: 1,
+        title: "Updated",
+        description: "Rewritten",
+        state: "open",
+        labels: [],
+      },
+    });
+  });
+
+  it("returns without patch when updateIssue has no changes", async () => {
+    const client = createClientMock();
+    client.get.mockResolvedValue(createIssue());
+    const manager = new TaskIssueManager(client as never);
+
+    const result = await manager.updateIssue(1, {});
+
+    expect(result).toEqual({
+      ok: true,
+      message: "Issue #1 already matches the requested issue content.",
+      issue: {
+        number: 1,
+        title: "Issue",
+        description: "Description",
+        state: "open",
+        labels: [],
+      },
+    });
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
   it("returns not found if GitHub returns 404", async () => {
     const client = createClientMock();
     client.get.mockRejectedValue(new GitHubApiError("not found", 404, null));

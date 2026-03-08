@@ -51,6 +51,8 @@ export type StopProjectCommandRequest = {
   messageId: string;
   requestedAt: string;
   requestedBy: string;
+  projectName: string;
+  projectSlug: string;
   mode: "now" | "when-project-complete";
 };
 
@@ -321,27 +323,55 @@ function parseStatusCommand(content: string): boolean {
   return content.trim().toLowerCase() === "status";
 }
 
-function parseStopProjectModeFromSuffix(
-  suffix: string,
-): { ok: true; mode: "now" | "when-project-complete" } | { ok: false; message: string } {
-  if (suffix.length === 0) {
+function normalizeStopProjectNameInput(input: string): { displayName: string; slug: string } {
+  const trimmed = input.trim();
+  if (trimmed.toLowerCase() === "evolvo") {
     return {
-      ok: true,
-      mode: "now",
+      displayName: "Evolvo",
+      slug: "evolvo",
     };
   }
 
-  const normalized = suffix.replace(/\s+/g, "").toLowerCase();
-  if (normalized === "whenprojectcomplete") {
+  const normalized = normalizeProjectNameInput(trimmed);
+  return {
+    displayName: normalized.displayName,
+    slug: normalized.slug,
+  };
+}
+
+function parseStopProjectRequestSuffix(
+  suffix: string,
+): { ok: true; projectName: string; mode: "now" | "when-project-complete" } | { ok: false; message: string } {
+  const trimmed = suffix.trim();
+  const compact = trimmed.replace(/\s+/g, "").toLowerCase();
+  if (trimmed.length === 0) {
     return {
-      ok: true,
-      mode: "when-project-complete",
+      ok: false,
+      message: "`stopProject` requires a project name.",
+    };
+  }
+
+  if (compact === "now" || compact === "whenprojectcomplete") {
+    return {
+      ok: false,
+      message: "`stopProject` requires a project name.",
+    };
+  }
+
+  const whenCompletePattern = /\s+whenprojectcomplete$/i;
+  const mode: "now" | "when-project-complete" = whenCompletePattern.test(trimmed) ? "when-project-complete" : "now";
+  const projectName = trimmed.replace(whenCompletePattern, "").trim();
+  if (!projectName) {
+    return {
+      ok: false,
+      message: "`stopProject` requires a project name.",
     };
   }
 
   return {
-    ok: false,
-    message: "`stopProject` only accepts `whenProjectComplete` as an optional argument.",
+    ok: true,
+    projectName,
+    mode,
   };
 }
 
@@ -587,8 +617,8 @@ function buildStartupBootMessageContent(): string {
   return [
     "🤖 Evolvo runtime booted.",
     "Operator control is online in plain-text mode, and the live bot session will register slash commands when it connects.",
-    "Slash commands: `/status`, `/quit`, `/startproject`, `/stopproject mode:now|when-project-complete`.",
-    "Plain-text fallback: `status`, `quit after current task`, `quit after tasks`, `startProject <project-name>`, `stopProject`, `stopProject whenProjectComplete`.",
+    "Slash commands: `/status`, `/quit`, `/startproject`, `/stopproject name:<project> mode:now|when-project-complete`.",
+    "Plain-text fallback: `status`, `quit after current task`, `quit after tasks`, `startProject <project-name>`, `stopProject <project-name>`, `stopProject <project-name> whenProjectComplete`.",
     "When Evolvo posts a cycle-limit prompt, reply with `continue` or `quit`.",
     `Started at: ${startedAt}`,
   ].join("\n");
@@ -761,9 +791,9 @@ function buildStopProjectAcknowledgementContent(
 ): string {
   if (!result.ok) {
     return [
-      `<@${operatorUserId}> Could not stop the current project.`,
+      `<@${operatorUserId}> Could not stop the requested project.`,
       result.message,
-      "Usage: `stopProject` or `stopProject whenProjectComplete`",
+      "Usage: `stopProject <project-name>` or `stopProject <project-name> whenProjectComplete`",
     ].join("\n");
   }
 
@@ -1029,8 +1059,14 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIChatInputApplicationC
     },
     {
       name: DISCORD_SLASH_COMMAND_NAMES.stopProject,
-      description: "Stop the currently active project",
+      description: "Stop a project by name",
       options: [
+        {
+          type: ApplicationCommandOptionType.String,
+          name: "name",
+          description: "Project name",
+          required: true,
+        },
         {
           type: ApplicationCommandOptionType.String,
           name: "mode",
@@ -1172,6 +1208,7 @@ async function processStopProjectControlCommand(
   workDir: string,
   messageId: string,
   requestedBy: string,
+  requestedProjectName: string,
   mode: "now" | "when-project-complete",
   handlers: DiscordControlHandlers,
 ): Promise<{ result: StopProjectCommandResult; duplicate: boolean }> {
@@ -1195,12 +1232,16 @@ async function processStopProjectControlCommand(
       throw new Error("Project stop commands are not available in this runtime.");
     }
 
+    const normalizedProject = normalizeStopProjectNameInput(requestedProjectName);
+
     return {
       duplicate: false,
       result: await handlers.onStopProject({
         messageId,
         requestedAt: new Date().toISOString(),
         requestedBy,
+        projectName: normalizedProject.displayName,
+        projectSlug: normalizedProject.slug,
         mode,
       }),
     };
@@ -1330,11 +1371,13 @@ export async function handleDiscordSlashCommandInteraction(
     };
   }
 
+  const stopProjectName = interaction.options.getString("name", true);
   const stopProjectMode = interaction.options.getString("mode") as "now" | "when-project-complete" | null;
   const processed = await processStopProjectControlCommand(
     workDir,
     interaction.id,
     `discord:${interaction.user.id}`,
+    stopProjectName,
     stopProjectMode ?? "now",
     handlers,
   );
@@ -1588,20 +1631,21 @@ export async function pollDiscordGracefulShutdownCommand(
 
       const stopProjectCommandSuffix = parseStopProjectCommand(message.content);
       if (stopProjectCommandSuffix !== null && handlers.onStopProject) {
-        const parsedStopMode = parseStopProjectModeFromSuffix(stopProjectCommandSuffix);
-        const processed = !parsedStopMode.ok
+        const parsedStopRequest = parseStopProjectRequestSuffix(stopProjectCommandSuffix);
+        const processed = !parsedStopRequest.ok
           ? {
             duplicate: false,
             result: {
               ok: false,
-              message: parsedStopMode.message,
+              message: parsedStopRequest.message,
             } satisfies StopProjectCommandResult,
           }
           : await processStopProjectControlCommand(
             workDir,
             message.id,
             `discord:${config.operatorUserId}`,
-            parsedStopMode.mode,
+            parsedStopRequest.projectName,
+            parsedStopRequest.mode,
             handlers,
           );
         if (!processed.duplicate) {

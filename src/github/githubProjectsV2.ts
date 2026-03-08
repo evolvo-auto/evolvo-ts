@@ -38,6 +38,25 @@ type EnsureProjectBoardResult = {
   workflow: ProjectWorkflow;
 };
 
+export type ProjectBoardIssueItem = {
+  itemId: string;
+  issueNodeId: string;
+  issueNumber: number;
+  title: string;
+  body: string;
+  state: "OPEN" | "CLOSED";
+  url: string;
+  labels: string[];
+  repository: {
+    owner: string;
+    repo: string;
+    url: string;
+    reference: string;
+  };
+  stage: ProjectWorkflowStage | null;
+  stageOptionId: string | null;
+ };
+
 type ProjectStageOptionInput = {
   color: "BLUE" | "GRAY" | "GREEN" | "ORANGE" | "PINK" | "PURPLE" | "RED" | "YELLOW";
   description: string;
@@ -153,6 +172,206 @@ export class GitHubProjectsV2Client {
         lastSyncedAt: new Date().toISOString(),
       },
     };
+  }
+
+  public async listProjectIssueItems(project: ProjectRecord): Promise<ProjectBoardIssueItem[]> {
+    const projectId = this.requireWorkflowMetadata(project, "boardId");
+    const data = await this.client.graphql<{
+      node?: {
+        items?: {
+          nodes?: Array<{
+            id?: string | null;
+            fieldValueByName?: {
+              name?: string | null;
+              optionId?: string | null;
+            } | null;
+            content?: {
+              id?: string | null;
+              number?: number | null;
+              title?: string | null;
+              body?: string | null;
+              state?: "OPEN" | "CLOSED" | null;
+              url?: string | null;
+              labels?: {
+                nodes?: Array<{ name?: string | null } | null> | null;
+              } | null;
+              repository?: {
+                name?: string | null;
+                url?: string | null;
+                owner?: {
+                  login?: string | null;
+                } | null;
+              } | null;
+            } | null;
+          } | null> | null;
+        } | null;
+      } | null;
+    }>(
+      `
+        query ListProjectIssueItems($projectId: ID!) {
+          node(id: $projectId) {
+            ... on ProjectV2 {
+              items(first: 100) {
+                nodes {
+                  id
+                  fieldValueByName(name: "${STAGE_FIELD_NAME}") {
+                    ... on ProjectV2ItemFieldSingleSelectValue {
+                      name
+                      optionId
+                    }
+                  }
+                  content {
+                    ... on Issue {
+                      id
+                      number
+                      title
+                      body
+                      state
+                      url
+                      labels(first: 50) {
+                        nodes {
+                          name
+                        }
+                      }
+                      repository {
+                        name
+                        url
+                        owner {
+                          login
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      { projectId },
+    );
+
+    const items = data.node?.items?.nodes ?? [];
+    const normalizedItems: ProjectBoardIssueItem[] = [];
+    for (const item of items) {
+      const itemId = item?.id?.trim();
+      const issueNodeId = item?.content?.id?.trim();
+      const issueNumber = typeof item?.content?.number === "number" ? item.content.number : null;
+      const title = item?.content?.title?.trim();
+      const url = item?.content?.url?.trim();
+      const repoName = item?.content?.repository?.name?.trim();
+      const repoOwner = item?.content?.repository?.owner?.login?.trim();
+      const repoUrl = item?.content?.repository?.url?.trim();
+      if (!itemId || !issueNodeId || issueNumber === null || !title || !url || !repoName || !repoOwner || !repoUrl) {
+        continue;
+      }
+
+      const stage = this.normalizeStageName(item?.fieldValueByName?.name);
+      normalizedItems.push({
+        itemId,
+        issueNodeId,
+        issueNumber,
+        title,
+        body: item?.content?.body ?? "",
+        state: item?.content?.state === "CLOSED" ? "CLOSED" : "OPEN",
+        url,
+        labels: (item?.content?.labels?.nodes ?? [])
+          .map((label) => label?.name?.trim() ?? "")
+          .filter((label) => label.length > 0),
+        repository: {
+          owner: repoOwner,
+          repo: repoName,
+          url: repoUrl,
+          reference: `${repoOwner}/${repoName}`,
+        },
+        stage,
+        stageOptionId: item?.fieldValueByName?.optionId?.trim() || null,
+      });
+    }
+
+    return normalizedItems;
+  }
+
+  public async ensureRepositoryIssueItem(project: ProjectRecord, issueNumber: number): Promise<ProjectBoardIssueItem> {
+    const existingItems = await this.listProjectIssueItems(project);
+    const existingItem = existingItems.find((item) => item.issueNumber === issueNumber);
+    if (existingItem) {
+      return existingItem;
+    }
+
+    const projectId = this.requireWorkflowMetadata(project, "boardId");
+    const issueNodeId = await this.getRepositoryIssueId(
+      project.executionRepo.owner,
+      project.executionRepo.repo,
+      issueNumber,
+    );
+    await this.client.graphql<{
+      addProjectV2ItemById?: {
+        item?: {
+          id?: string | null;
+        } | null;
+      } | null;
+    }>(
+      `
+        mutation AddProjectIssueItem($projectId: ID!, $contentId: ID!) {
+          addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+            item {
+              id
+            }
+          }
+        }
+      `,
+      {
+        projectId,
+        contentId: issueNodeId,
+      },
+    );
+
+    const refreshedItems = await this.listProjectIssueItems(project);
+    const addedItem = refreshedItems.find((item) => item.issueNumber === issueNumber);
+    if (!addedItem) {
+      throw new Error(`GitHub did not return board item metadata for issue #${issueNumber} in project ${project.slug}.`);
+    }
+
+    return addedItem;
+  }
+
+  public async moveProjectItemToStage(
+    project: ProjectRecord,
+    itemId: string,
+    stage: ProjectWorkflowStage,
+  ): Promise<void> {
+    const projectId = this.requireWorkflowMetadata(project, "boardId");
+    const fieldId = this.requireWorkflowMetadata(project, "stageFieldId");
+    const optionId = project.workflow.stageOptionIds[stage]?.trim();
+    if (!optionId) {
+      throw new Error(`Project ${project.slug} is missing the stage option id for ${stage}.`);
+    }
+
+    await this.client.graphql(
+      `
+        mutation MoveProjectItemStage($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+          updateProjectV2ItemFieldValue(
+            input: {
+              projectId: $projectId
+              itemId: $itemId
+              fieldId: $fieldId
+              value: { singleSelectOptionId: $optionId }
+            }
+          ) {
+            projectV2Item {
+              id
+            }
+          }
+        }
+      `,
+      {
+        projectId,
+        itemId,
+        fieldId,
+        optionId,
+      },
+    );
   }
 
   private async getOwner(owner: string, projectTitle: string): Promise<GraphqlOwner> {
@@ -290,6 +509,59 @@ export class GitHubProjectsV2Client {
     }
 
     return repositoryId;
+  }
+
+  private async getRepositoryIssueId(owner: string, repo: string, issueNumber: number): Promise<string> {
+    const data = await this.client.graphql<{
+      repository?: {
+        issue?: {
+          id?: string | null;
+        } | null;
+      } | null;
+    }>(
+      `
+        query GetRepositoryIssueId($owner: String!, $repo: String!, $issueNumber: Int!) {
+          repository(owner: $owner, name: $repo) {
+            issue(number: $issueNumber) {
+              id
+            }
+          }
+        }
+      `,
+      { owner, repo, issueNumber },
+    );
+
+    const issueId = data.repository?.issue?.id?.trim();
+    if (!issueId) {
+      throw new Error(`Could not resolve issue node id for ${owner}/${repo}#${issueNumber}.`);
+    }
+
+    return issueId;
+  }
+
+  private normalizeStageName(stageName: string | null | undefined): ProjectWorkflowStage | null {
+    if (!stageName) {
+      return null;
+    }
+
+    const normalizedStageName = stageName.trim();
+    if (!PROJECT_WORKFLOW_STAGES.includes(normalizedStageName as ProjectWorkflowStage)) {
+      return null;
+    }
+
+    return normalizedStageName as ProjectWorkflowStage;
+  }
+
+  private requireWorkflowMetadata(
+    project: ProjectRecord,
+    key: "boardId" | "stageFieldId",
+  ): string {
+    const value = project.workflow[key]?.trim();
+    if (!value) {
+      throw new Error(`Project ${project.slug} is missing workflow metadata: ${key}.`);
+    }
+
+    return value;
   }
 
   private isRepositoryLinked(

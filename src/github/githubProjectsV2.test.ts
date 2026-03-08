@@ -271,4 +271,194 @@ describe("GitHubProjectsV2Client", () => {
     );
     expect(graphql).toHaveBeenCalledTimes(5);
   });
+
+  it("lists project issue items with stage metadata", async () => {
+    const graphql = vi.fn().mockResolvedValue({
+      node: {
+        items: {
+          nodes: [
+            {
+              id: "item-1",
+              fieldValueByName: {
+                name: "Ready for Dev",
+                optionId: "opt-ready",
+              },
+              content: {
+                id: "issue-node-1",
+                number: 17,
+                title: "Add queue scheduler",
+                body: "Implement the project scheduler.",
+                state: "OPEN",
+                url: "https://github.com/evolvo-auto/habit-cli/issues/17",
+                labels: {
+                  nodes: [{ name: "enhancement" }],
+                },
+                repository: {
+                  name: "habit-cli",
+                  url: "https://github.com/evolvo-auto/habit-cli",
+                  owner: {
+                    login: "evolvo-auto",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const client = new GitHubProjectsV2Client({ graphql } as never);
+    const project = {
+      ...createProject(),
+      workflow: {
+        ...createProject().workflow,
+        boardId: "project-id",
+      },
+    };
+
+    const items = await client.listProjectIssueItems(project);
+
+    expect(items).toEqual([
+      {
+        itemId: "item-1",
+        issueNodeId: "issue-node-1",
+        issueNumber: 17,
+        title: "Add queue scheduler",
+        body: "Implement the project scheduler.",
+        state: "OPEN",
+        url: "https://github.com/evolvo-auto/habit-cli/issues/17",
+        labels: ["enhancement"],
+        repository: {
+          owner: "evolvo-auto",
+          repo: "habit-cli",
+          url: "https://github.com/evolvo-auto/habit-cli",
+          reference: "evolvo-auto/habit-cli",
+        },
+        stage: "Ready for Dev",
+        stageOptionId: "opt-ready",
+      },
+    ]);
+  });
+
+  it("adds a repository issue to the board when missing", async () => {
+    const graphql = vi.fn()
+      .mockResolvedValueOnce({
+        node: {
+          items: {
+            nodes: [],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        repository: {
+          issue: {
+            id: "issue-node-22",
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        addProjectV2ItemById: {
+          item: {
+            id: "item-22",
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        node: {
+          items: {
+            nodes: [
+              {
+                id: "item-22",
+                fieldValueByName: {
+                  name: "Inbox",
+                  optionId: "opt-inbox",
+                },
+                content: {
+                  id: "issue-node-22",
+                  number: 22,
+                  title: "Candidate issue",
+                  body: "",
+                  state: "OPEN",
+                  url: "https://github.com/evolvo-auto/habit-cli/issues/22",
+                  labels: {
+                    nodes: [],
+                  },
+                  repository: {
+                    name: "habit-cli",
+                    url: "https://github.com/evolvo-auto/habit-cli",
+                    owner: {
+                      login: "evolvo-auto",
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      });
+
+    const client = new GitHubProjectsV2Client({ graphql } as never);
+    const project = {
+      ...createProject(),
+      workflow: {
+        ...createProject().workflow,
+        boardId: "project-id",
+      },
+    };
+
+    const item = await client.ensureRepositoryIssueItem(project, 22);
+
+    expect(item.issueNumber).toBe(22);
+    expect(graphql).toHaveBeenNthCalledWith(
+      2,
+      expect.any(String),
+      expect.objectContaining({
+        owner: "evolvo-auto",
+        repo: "habit-cli",
+        issueNumber: 22,
+      }),
+    );
+    expect(graphql).toHaveBeenNthCalledWith(
+      3,
+      expect.any(String),
+      expect.objectContaining({
+        projectId: "project-id",
+        contentId: "issue-node-22",
+      }),
+    );
+  });
+
+  it("moves a project item to the requested workflow stage", async () => {
+    const graphql = vi.fn().mockResolvedValue({
+      updateProjectV2ItemFieldValue: {
+        projectV2Item: {
+          id: "item-4",
+        },
+      },
+    });
+    const client = new GitHubProjectsV2Client({ graphql } as never);
+    const project = {
+      ...createProject(),
+      workflow: {
+        ...createProject().workflow,
+        boardId: "project-id",
+        stageFieldId: "stage-field-id",
+        stageOptionIds: {
+          "Ready for Review": "opt-review",
+        },
+      },
+    };
+
+    await client.moveProjectItemToStage(project, "item-4", "Ready for Review");
+
+    expect(graphql).toHaveBeenCalledWith(
+      expect.any(String),
+      {
+        projectId: "project-id",
+        itemId: "item-4",
+        fieldId: "stage-field-id",
+        optionId: "opt-review",
+      },
+    );
+  });
 });

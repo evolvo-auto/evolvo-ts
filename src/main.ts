@@ -86,6 +86,7 @@ import {
 import { parseProjectProvisioningIssueMetadata } from "./issues/projectProvisioningIssue.js";
 import { clearActiveProjectState, readActiveProjectState, stopActiveProjectState } from "./projects/activeProjectState.js";
 import { activateProjectInState, deactivateProjectInState, readActiveProjectsState } from "./projects/activeProjectsState.js";
+import { readProjectActivityState, setProjectActivityMode } from "./projects/projectActivityState.js";
 import {
   PROJECT_ROUTING_BLOCKED_LABEL,
   buildProjectRoutingBlockedComment,
@@ -111,6 +112,7 @@ import {
   type RuntimeStatusProject,
   type RuntimeStatusState,
 } from "./runtime/runtimeStatus.js";
+import { runWorkflowSchedulerCycle } from "./runtime/workflowScheduler.js";
 
 const MAX_ISSUE_CYCLES = 10;
 const MIN_REPLENISH_ISSUES = 3;
@@ -512,101 +514,118 @@ export async function main(): Promise<void> {
       return result;
     },
     onStopProject: async (request) => {
-      console.log(`[stopProject] received stop request from ${request.requestedBy}.`);
-      const stopResult = await stopActiveProjectState({
-        workDir: WORK_DIR,
-        requestedBy: request.requestedBy,
-        mode: request.mode,
-        updatedAt: request.requestedAt,
-      });
-      activeProjectState = stopResult.state;
-      let projectRecord = null;
-      if (stopResult.state.activeProjectSlug !== null) {
-        try {
-          const registry = await readProjectRegistry(WORK_DIR, defaultProjectContext);
-          projectRecord = findProjectBySlug(registry, stopResult.state.activeProjectSlug);
-        } catch {
-          projectRecord = null;
-        }
+      console.log(`[stopProject] received stop request for ${request.projectSlug} from ${request.requestedBy}.`);
+      const registry = await readProjectRegistry(WORK_DIR, defaultProjectContext);
+      const projectRecord = findProjectBySlug(registry, request.projectSlug);
+      if (projectRecord === null) {
+        return {
+          ok: false,
+          message: `Project \`${request.projectName}\` is not registered.`,
+        };
       }
-      const result: StopProjectCommandResult = stopResult.status === "stopped"
-        ? {
-          ok: true,
-          action: "stopped",
-          message: `Project \`${projectRecord?.slug ?? stopResult.state.activeProjectSlug ?? "unknown"}\` will not be selected again until \`startProject <project-name>\` is used.`,
-          ...(projectRecord
-            ? {
-              project: {
-                displayName: projectRecord.displayName,
-                slug: projectRecord.slug,
-              },
-            }
-            : {}),
-        }
-        : stopResult.status === "stop-when-complete-scheduled"
-          ? {
+
+      if (projectRecord.slug === "evolvo") {
+        return {
+          ok: false,
+          message: "Stopping the default Evolvo project is not supported yet.",
+        };
+      }
+
+      const projectActivityState = await readProjectActivityState(WORK_DIR);
+      const currentProjectActivity = projectActivityState.projects.find((entry) => entry.slug === projectRecord.slug) ?? null;
+
+      let result: StopProjectCommandResult;
+      if (request.mode === "when-project-complete") {
+        if (currentProjectActivity?.deferredStopMode === "when-project-complete") {
+          result = {
+            ok: true,
+            action: "already-stop-when-complete-scheduled",
+            message: `Project \`${projectRecord.slug}\` is already scheduled to stop when it runs out of actionable work.`,
+            project: {
+              displayName: projectRecord.displayName,
+              slug: projectRecord.slug,
+            },
+          };
+        } else {
+          await setProjectActivityMode({
+            workDir: WORK_DIR,
+            slug: projectRecord.slug,
+            activityState: "active",
+            deferredStopMode: "when-project-complete",
+            requestedBy: request.requestedBy,
+            updatedAt: request.requestedAt,
+          });
+          result = {
             ok: true,
             action: "stop-when-complete-scheduled",
-            message: `Project \`${projectRecord?.slug ?? stopResult.state.activeProjectSlug ?? "unknown"}\` will keep running until it has no actionable issues left. Evolvo will then stop it automatically, return to self-work, and remain online.`,
-            ...(projectRecord
-              ? {
-                project: {
-                  displayName: projectRecord.displayName,
-                  slug: projectRecord.slug,
-                },
-              }
-              : {}),
-          }
-          : stopResult.status === "already-stop-when-complete-scheduled"
-            ? {
-              ok: true,
-              action: "already-stop-when-complete-scheduled",
-              message: `Project \`${projectRecord?.slug ?? stopResult.state.activeProjectSlug ?? "unknown"}\` is already scheduled to stop when it runs out of actionable work. Evolvo will return to self-work afterward.`,
-              ...(projectRecord
-                ? {
-                  project: {
-                    displayName: projectRecord.displayName,
-                    slug: projectRecord.slug,
-                  },
-                }
-                : {}),
-            }
-        : stopResult.status === "already-stopped"
-          ? {
-            ok: true,
-            action: "already-stopped",
-            message: `Project \`${projectRecord?.slug ?? stopResult.state.activeProjectSlug ?? "unknown"}\` is already halted. Use \`startProject <project-name>\` to resume it later.`,
-            ...(projectRecord
-              ? {
-                project: {
-                  displayName: projectRecord.displayName,
-                  slug: projectRecord.slug,
-                },
-              }
-              : {}),
-          }
-          : {
-            ok: true,
-            action: "no-active-project",
-            message: "There is no active project to stop. Evolvo remains online and ready for further operator commands.",
+            message: `Project \`${projectRecord.slug}\` will stop automatically when it has no non-terminal board items left.`,
+            project: {
+              displayName: projectRecord.displayName,
+              slug: projectRecord.slug,
+            },
           };
-      if (
-        stopResult.state.activeProjectSlug !== null
-        && (stopResult.status === "stopped" || stopResult.status === "already-stopped")
-      ) {
-        await deactivateProjectInState(WORK_DIR, stopResult.state.activeProjectSlug);
-        console.log(`[projects] removed ${stopResult.state.activeProjectSlug} from the multi-project active set.`);
+        }
+      } else if (currentProjectActivity?.activityState === "stopped") {
+        result = {
+          ok: true,
+          action: "already-stopped",
+          message: `Project \`${projectRecord.slug}\` is already halted. Use \`startProject <project-name>\` to resume it later.`,
+          project: {
+            displayName: projectRecord.displayName,
+            slug: projectRecord.slug,
+          },
+        };
+      } else {
+        await setProjectActivityMode({
+          workDir: WORK_DIR,
+          slug: projectRecord.slug,
+          activityState: "stopped",
+          requestedBy: request.requestedBy,
+          updatedAt: request.requestedAt,
+        });
+        await deactivateProjectInState(WORK_DIR, projectRecord.slug);
+        console.log(`[projects] removed ${projectRecord.slug} from the multi-project active set.`);
+        result = {
+          ok: true,
+          action: "stopped",
+          message: `Project \`${projectRecord.slug}\` will not be scheduled again until \`startProject <project-name>\` is used.`,
+          project: {
+            displayName: projectRecord.displayName,
+            slug: projectRecord.slug,
+          },
+        };
       }
+
       console.log(buildStopProjectResultLog(result));
       return result;
     },
     onStatus: async (request): Promise<StatusCommandResult> => {
-      const activeProjects = await resolveActiveStatusProjects(defaultProjectContext);
-      const activeProject = await resolveActiveStatusProject(activeProjectState.activeProjectSlug, defaultProjectContext);
+      const [activeProjects, registry, projectActivityState] = await Promise.all([
+        resolveActiveStatusProjects(defaultProjectContext),
+        readProjectRegistry(WORK_DIR, defaultProjectContext),
+        readProjectActivityState(WORK_DIR),
+      ]);
+      const leasedProjectSlug = projectActivityState.projects.find((entry) => entry.currentCodingLease !== null)?.slug
+        ?? projectActivityState.projects.find((entry) => entry.activityState === "active" && entry.slug !== "evolvo")?.slug
+        ?? projectActivityState.projects.find((entry) => entry.activityState === "active")?.slug
+        ?? null;
+      const activeProjectRecord = leasedProjectSlug ? findProjectBySlug(registry, leasedProjectSlug) : null;
+      const activeProject = activeProjectRecord
+        ? {
+          displayName: activeProjectRecord.displayName,
+          slug: activeProjectRecord.slug,
+          repository: `${activeProjectRecord.executionRepo.owner}/${activeProjectRecord.executionRepo.repo}`,
+        }
+        : null;
+      const hasDeferredStop = projectActivityState.projects.some((entry) => entry.deferredStopMode === "when-project-complete");
       const snapshot = buildRuntimeStatusSnapshot({
         runtimeState: runtimeStatusState,
         activitySummary: runtimeStatusActivitySummary,
-        activeProjectState,
+        activeProjectState: {
+          activeProjectSlug: activeProject?.slug ?? null,
+          selectionState: activeProjects.length > 0 ? "active" : null,
+          deferredStopMode: hasDeferredStop ? "when-project-complete" : null,
+        },
         activeProjects,
         activeProject,
         activeIssue: runtimeStatusIssue,
@@ -706,6 +725,28 @@ export async function main(): Promise<void> {
       let retryAttempt = 0;
       while (true) {
         try {
+          runtimeStatusState = "active";
+          runtimeStatusActivitySummary = "Running staged project workflow.";
+          const workflowCycle = await runWorkflowSchedulerCycle({
+            workDir: WORK_DIR,
+            defaultProject: defaultProjectContext,
+            trackerIssueManager: issueManager,
+            boardsClient: projectsClient,
+            pullRequestClient,
+          });
+          const projectStageSummary = workflowCycle.inventory.projects.map((projectInventory) =>
+            `${projectInventory.project.slug}: Inbox=${projectInventory.countsByStage.Inbox}, Planning=${projectInventory.countsByStage.Planning}, Ready=${projectInventory.countsByStage["Ready for Dev"]}, InDev=${projectInventory.countsByStage["In Dev"]}, Review=${projectInventory.countsByStage["Ready for Review"]}, Release=${projectInventory.countsByStage["Ready for Release"]}, Blocked=${projectInventory.countsByStage.Blocked}`
+          ).join(" | ");
+          console.log(
+            `[workflow] cycle=${cycle} generatorCreated=${workflowCycle.summary.issueGeneratorCreated} plannerReady=${workflowCycle.summary.plannerMovedToReadyForDev} plannerBlocked=${workflowCycle.summary.plannerBlocked} devStarted=${workflowCycle.summary.devStarted} reviewProcessed=${workflowCycle.summary.reviewProcessed} releaseProcessed=${workflowCycle.summary.releaseProcessed}`,
+          );
+          if (projectStageSummary) {
+            console.log(`[workflow] stages ${projectStageSummary}`);
+          }
+          await waitForRunLoopRetry(1_000);
+          break;
+
+          /*
           const unifiedQueue = await buildUnifiedIssueQueue({
             trackerIssueManager: issueManager,
             workDir: WORK_DIR,
@@ -1379,6 +1420,7 @@ export async function main(): Promise<void> {
           }
 
           break;
+          */
         } catch (error) {
           if (isTransientGitHubError(error) && retryAttempt < RUN_LOOP_GITHUB_MAX_RETRIES) {
             retryAttempt += 1;

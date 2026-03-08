@@ -79,6 +79,12 @@ export type UpdateIssueLabelsOptions = {
   remove?: string[];
 };
 
+export type UpdateIssueOptions = {
+  title?: string;
+  description?: string;
+  state?: "open" | "closed";
+};
+
 type IssueTemplate = {
   title: string;
   description: string;
@@ -755,6 +761,51 @@ export class TaskIssueManager {
     return {
       ok: true,
       message: `Issue #${issueNumber} labels updated.`,
+      issue: formatIssue(updated),
+    };
+  }
+
+  public async updateIssue(issueNumber: number, options: UpdateIssueOptions): Promise<IssueActionResult> {
+    const issue = await this.getIssue(issueNumber);
+    if (!issue) {
+      return { ok: false, message: `Issue #${issueNumber} was not found.` };
+    }
+
+    const nextTitle = options.title?.trim();
+    const nextDescription = options.description?.trim();
+    const nextState = options.state;
+    if (nextState !== undefined && nextState !== "open" && nextState !== "closed") {
+      return { ok: false, message: "Issue state must be either open or closed." };
+    }
+
+    const body: Record<string, unknown> = {};
+    if (nextTitle !== undefined) {
+      if (nextTitle.length === 0) {
+        return { ok: false, message: "Issue title cannot be empty." };
+      }
+      body.title = nextTitle;
+    }
+
+    if (nextDescription !== undefined) {
+      body.body = nextDescription;
+    }
+
+    if (nextState !== undefined) {
+      body.state = nextState;
+    }
+
+    if (Object.keys(body).length === 0) {
+      return {
+        ok: true,
+        message: `Issue #${issueNumber} already matches the requested issue content.`,
+        issue: formatIssue(issue),
+      };
+    }
+
+    const updated = await this.patchIssueApi<GitHubIssue>(`/${issueNumber}`, body);
+    return {
+      ok: true,
+      message: `Issue #${issueNumber} updated.`,
       issue: formatIssue(updated),
     };
   }

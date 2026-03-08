@@ -1303,7 +1303,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7161", content: "stopProject", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "7161", content: "stopProject Habit CLI", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
@@ -1316,6 +1316,8 @@ describe("operatorControl", () => {
       messageId: "7161",
       requestedAt: expect.any(String),
       requestedBy: "discord:operator-1",
+      projectName: "Habit CLI",
+      projectSlug: "habit-cli",
       mode: "now",
     });
     expect(fetchSpy).toHaveBeenNthCalledWith(
@@ -1366,9 +1368,9 @@ describe("operatorControl", () => {
         method: "POST",
         body: JSON.stringify({
           content: [
-            "<@operator-1> Could not stop the current project.",
-            "`stopProject` only accepts `whenProjectComplete` as an optional argument.",
-            "Usage: `stopProject` or `stopProject whenProjectComplete`",
+            "<@operator-1> Could not stop the requested project.",
+            "`stopProject` requires a project name.",
+            "Usage: `stopProject <project-name>` or `stopProject <project-name> whenProjectComplete`",
           ].join("\n"),
         }),
       }),
@@ -1398,7 +1400,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7166", content: "stopProject whenProjectComplete", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "7166", content: "stopProject Habit CLI whenProjectComplete", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
@@ -1411,6 +1413,8 @@ describe("operatorControl", () => {
       messageId: "7166",
       requestedAt: expect.any(String),
       requestedBy: "discord:operator-1",
+      projectName: "Habit CLI",
+      projectSlug: "habit-cli",
       mode: "when-project-complete",
     });
     expect(fetchSpy).toHaveBeenNthCalledWith(
@@ -1866,6 +1870,9 @@ describe("operatorControl", () => {
     const interaction = createSlashInteraction({
       id: "slash-stop-1",
       commandName: "stopproject",
+      values: {
+        name: "Habit CLI",
+      },
     });
 
     const result = await handleDiscordSlashCommandInteraction(interaction, workDir, { onStopProject });
@@ -1874,6 +1881,8 @@ describe("operatorControl", () => {
       messageId: "slash-stop-1",
       requestedAt: expect.any(String),
       requestedBy: "discord:operator-1",
+      projectName: "Habit CLI",
+      projectSlug: "habit-cli",
       mode: "now",
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
@@ -1913,6 +1922,7 @@ describe("operatorControl", () => {
       id: "slash-stop-when-complete-1",
       commandName: "stopproject",
       values: {
+        name: "Habit CLI",
         mode: "when-project-complete",
       },
     });
@@ -1923,6 +1933,8 @@ describe("operatorControl", () => {
       messageId: "slash-stop-when-complete-1",
       requestedAt: expect.any(String),
       requestedBy: "discord:operator-1",
+      projectName: "Habit CLI",
+      projectSlug: "habit-cli",
       mode: "when-project-complete",
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
