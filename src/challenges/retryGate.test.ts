@@ -276,4 +276,45 @@ describe("retryGate", () => {
       `Recovered malformed challenge retry state store at ${statePath}; preserved corrupt file at ${corruptPath}.`,
     );
   });
+
+  it("archives parseable but invalid retry state payloads before normalizing them", async () => {
+    vi.useFakeTimers();
+    const recoveryAtMs = new Date("2026-03-08T00:50:00.000Z").getTime();
+    vi.setSystemTime(recoveryAtMs);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const evolvoDir = join(workDir, ".evolvo");
+    const statePath = join(evolvoDir, "challenge-retry-state.json");
+    const corruptPath = join(evolvoDir, `challenge-retry-state.corrupt-${recoveryAtMs}.json`);
+    const invalidPayload = {
+      failuresByChallenge: {
+        15: {
+          attempts: 2,
+          lastFailureAtMs: 1000,
+        },
+        99: {
+          attempts: -1,
+          lastFailureAtMs: "bad",
+        },
+      },
+    };
+    await mkdir(evolvoDir, { recursive: true });
+    await writeFile(statePath, JSON.stringify(invalidPayload), "utf8");
+
+    const state = await readChallengeRetryState(workDir);
+
+    expect(state).toEqual({
+      failuresByChallenge: {
+        15: {
+          attempts: 2,
+          lastFailureAtMs: 1000,
+        },
+      },
+    });
+    expect(await readFile(corruptPath, "utf8")).toBe(JSON.stringify(invalidPayload));
+    expect(warnSpy).toHaveBeenCalledWith(
+      `Recovered invalid challenge retry state store at ${statePath}; preserved corrupt file at ${corruptPath}.`,
+    );
+  });
 });

@@ -1,10 +1,15 @@
 import { promises as fs } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 
+export type RecoverableJsonStateNormalizationResult<T> = {
+  state: T;
+  recoveredInvalid: boolean;
+};
+
 type ReadRecoverableJsonStateOptions<T> = {
   statePath: string;
   createDefaultState: () => T;
-  normalizeState: (raw: unknown) => T;
+  normalizeState: (raw: unknown) => RecoverableJsonStateNormalizationResult<T>;
   warningLabel: string;
 };
 
@@ -26,7 +31,12 @@ export async function readRecoverableJsonState<T>(
 ): Promise<T> {
   try {
     const raw = await fs.readFile(options.statePath, "utf8");
-    return options.normalizeState(JSON.parse(raw) as unknown);
+    const normalized = options.normalizeState(JSON.parse(raw) as unknown);
+    if (!normalized.recoveredInvalid) {
+      return normalized.state;
+    }
+
+    return recoverInvalidJsonState(options, normalized.state);
   } catch (error) {
     const errorCode = (error as NodeJS.ErrnoException).code;
     if (errorCode === "ENOENT") {
@@ -46,11 +56,25 @@ async function recoverMalformedJsonState<T>(
 ): Promise<T> {
   const corruptPath = buildCorruptStatePath(options.statePath);
   await fs.rename(options.statePath, corruptPath);
-  const defaultState = options.normalizeState(options.createDefaultState());
+  const defaultState = options.normalizeState(options.createDefaultState()).state;
   await fs.mkdir(dirname(options.statePath), { recursive: true });
   await fs.writeFile(options.statePath, `${JSON.stringify(defaultState, null, 2)}\n`, "utf8");
   console.warn(
     `Recovered malformed ${options.warningLabel} at ${options.statePath}; preserved corrupt file at ${corruptPath}.`,
   );
   return defaultState;
+}
+
+async function recoverInvalidJsonState<T>(
+  options: ReadRecoverableJsonStateOptions<T>,
+  normalizedState: T,
+): Promise<T> {
+  const corruptPath = buildCorruptStatePath(options.statePath);
+  await fs.rename(options.statePath, corruptPath);
+  await fs.mkdir(dirname(options.statePath), { recursive: true });
+  await fs.writeFile(options.statePath, `${JSON.stringify(normalizedState, null, 2)}\n`, "utf8");
+  console.warn(
+    `Recovered invalid ${options.warningLabel} at ${options.statePath}; preserved corrupt file at ${corruptPath}.`,
+  );
+  return normalizedState;
 }
