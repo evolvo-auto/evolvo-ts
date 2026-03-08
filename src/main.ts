@@ -3,11 +3,22 @@ import { pathToFileURL } from "node:url";
 import { runIssueCommand } from "./issues/runIssueCommand.js";
 import { DEFAULT_PROMPT as LOOP_DEFAULT_PROMPT } from "./runtime/loopUtils.js";
 import { runRuntimeApp } from "./runtime/runRuntimeApp.js";
+import { parseWorkflowRuntimeCommand } from "./runtime/workers/workerCli.js";
+import { runWorkflowWorkerCommand } from "./runtime/workers/runWorkflowWorker.js";
 
 export const DEFAULT_PROMPT = LOOP_DEFAULT_PROMPT;
 
 export async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  const runtimeCommand = parseWorkflowRuntimeCommand(args);
+  if (runtimeCommand?.kind === "worker") {
+    await runWorkflowWorkerCommand({
+      role: runtimeCommand.role,
+      projectSlug: runtimeCommand.projectSlug,
+    });
+    return;
+  }
+
   const issueCommandHandled = await runIssueCommand(args);
   if (issueCommandHandled) {
     return;

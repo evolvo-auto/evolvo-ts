@@ -3,10 +3,9 @@ import { createDiscordControlHandlers } from "./runtimeOperatorHandlers.js";
 import { createInitialRuntimeExecutionState } from "./runtimeExecutionState.js";
 import { createRuntimeServices } from "./runtimeServices.js";
 import { runRuntimeStartup } from "./runtimeStartup.js";
-import { runWorkflowRuntimeLoop } from "./workflowRuntimeLoop.js";
+import { runWorkflowSupervisorRuntime } from "./workflowSupervisorRuntime.js";
 
 const MAX_ISSUE_CYCLES = 10;
-const RUN_LOOP_GITHUB_MAX_RETRIES = 2;
 
 export async function runRuntimeApp(options: {
   githubOwner: string;
@@ -38,16 +37,8 @@ export async function runRuntimeApp(options: {
   });
 
   try {
-    await runWorkflowRuntimeLoop({
+    await runWorkflowSupervisorRuntime({
       workDir,
-      runtimeState,
-      maxIssueCycles: MAX_ISSUE_CYCLES,
-      runLoopGitHubMaxRetries: RUN_LOOP_GITHUB_MAX_RETRIES,
-      discordHandlers,
-      defaultProjectContext: services.defaultProjectContext,
-      issueManager: services.issueManager,
-      projectsClient: services.projectsClient,
-      pullRequestClient: services.pullRequestClient,
     });
   } finally {
     await gracefulShutdownListener?.stop();
