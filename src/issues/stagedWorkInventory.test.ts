@@ -214,4 +214,184 @@ describe("buildStagedWorkInventory", () => {
       }),
     );
   });
+
+  it("preserves an existing non-terminal board stage for open issues", async () => {
+    const defaultProject = createProject({
+      workflow: {
+        ...createDefaultProjectWorkflow("Evolvo-org"),
+        boardId: "project-evolvo",
+        stageFieldId: "stage-field-evolvo",
+        stageOptionIds: {
+          Planning: "opt-planning",
+          "Ready for Dev": "opt-ready",
+        },
+      },
+    });
+
+    readProjectRegistryMock.mockResolvedValue({
+      version: 1,
+      projects: [defaultProject],
+    });
+    readActiveProjectsStateMock.mockResolvedValue({
+      version: 1,
+      projects: [],
+    });
+    synchronizeProjectActivityStateMock.mockResolvedValue({
+      version: 1,
+      projects: [
+        {
+          slug: "evolvo",
+          activityState: "active",
+          deferredStopMode: null,
+          requestedBy: null,
+          updatedAt: null,
+          currentCodingLease: null,
+          currentWorkItem: null,
+          lastStageTransition: null,
+          schedulingEligibility: { eligible: true, reason: null, lastScheduledAt: null },
+          lastFailure: null,
+        },
+      ],
+    });
+
+    const trackerIssueManager = {
+      forRepository: vi.fn().mockReturnValue({
+        listOpenIssues: vi.fn().mockResolvedValue([
+          { number: 413, title: "Planner-owned issue", description: "", state: "open", labels: [] },
+        ]),
+      }),
+    };
+    const moveProjectItemToStage = vi.fn().mockResolvedValue(undefined);
+    const boardsClient = {
+      listProjectIssueItems: vi.fn().mockResolvedValue([
+        {
+          itemId: "item-413",
+          issueNodeId: "issue-node-413",
+          issueNumber: 413,
+          title: "Planner-owned issue",
+          body: "",
+          state: "OPEN",
+          url: "https://github.com/Evolvo-org/evolvo-ts/issues/413",
+          labels: [],
+          repository: {
+            owner: "Evolvo-org",
+            repo: "evolvo-ts",
+            url: "https://github.com/Evolvo-org/evolvo-ts",
+            reference: "Evolvo-org/evolvo-ts",
+          },
+          stage: "Ready for Dev",
+          stageOptionId: "opt-ready",
+        },
+      ]),
+      ensureRepositoryIssueItem: vi.fn(),
+      moveProjectItemToStage,
+    };
+
+    const inventory = await buildStagedWorkInventory({
+      workDir: "/tmp/evolvo-ts",
+      defaultProject: {
+        owner: "Evolvo-org",
+        repo: "evolvo-ts",
+        workDir: "/tmp/evolvo-ts",
+      },
+      trackerIssueManager: trackerIssueManager as never,
+      boardsClient: boardsClient as never,
+    });
+
+    expect(moveProjectItemToStage).not.toHaveBeenCalled();
+    expect(inventory.projects[0]?.items[0]).toEqual(
+      expect.objectContaining({
+        queueKey: "evolvo#413",
+        stage: "Ready for Dev",
+      }),
+    );
+    expect(inventory.projects[0]?.countsByStage["Ready for Dev"]).toBe(1);
+    expect(inventory.projects[0]?.countsByStage.Planning).toBe(0);
+  });
+
+  it("moves closed issues to Done even when the board stage is stale", async () => {
+    const defaultProject = createProject({
+      workflow: {
+        ...createDefaultProjectWorkflow("Evolvo-org"),
+        boardId: "project-evolvo",
+        stageFieldId: "stage-field-evolvo",
+        stageOptionIds: {
+          Planning: "opt-planning",
+          Done: "opt-done",
+        },
+      },
+    });
+
+    readProjectRegistryMock.mockResolvedValue({
+      version: 1,
+      projects: [defaultProject],
+    });
+    readActiveProjectsStateMock.mockResolvedValue({
+      version: 1,
+      projects: [],
+    });
+    synchronizeProjectActivityStateMock.mockResolvedValue({
+      version: 1,
+      projects: [
+        {
+          slug: "evolvo",
+          activityState: "active",
+          deferredStopMode: null,
+          requestedBy: null,
+          updatedAt: null,
+          currentCodingLease: null,
+          currentWorkItem: null,
+          lastStageTransition: null,
+          schedulingEligibility: { eligible: true, reason: null, lastScheduledAt: null },
+          lastFailure: null,
+        },
+      ],
+    });
+
+    const trackerIssueManager = {
+      forRepository: vi.fn().mockReturnValue({
+        listOpenIssues: vi.fn().mockResolvedValue([
+          { number: 500, title: "Completed issue", description: "", state: "closed", labels: [] },
+        ]),
+      }),
+    };
+    const moveProjectItemToStage = vi.fn().mockResolvedValue(undefined);
+    const boardsClient = {
+      listProjectIssueItems: vi.fn().mockResolvedValue([
+        {
+          itemId: "item-500",
+          issueNodeId: "issue-node-500",
+          issueNumber: 500,
+          title: "Completed issue",
+          body: "",
+          state: "CLOSED",
+          url: "https://github.com/Evolvo-org/evolvo-ts/issues/500",
+          labels: [],
+          repository: {
+            owner: "Evolvo-org",
+            repo: "evolvo-ts",
+            url: "https://github.com/Evolvo-org/evolvo-ts",
+            reference: "Evolvo-org/evolvo-ts",
+          },
+          stage: "Planning",
+          stageOptionId: "opt-planning",
+        },
+      ]),
+      ensureRepositoryIssueItem: vi.fn(),
+      moveProjectItemToStage,
+    };
+
+    await buildStagedWorkInventory({
+      workDir: "/tmp/evolvo-ts",
+      defaultProject: {
+        owner: "Evolvo-org",
+        repo: "evolvo-ts",
+        workDir: "/tmp/evolvo-ts",
+      },
+      trackerIssueManager: trackerIssueManager as never,
+      boardsClient: boardsClient as never,
+    });
+
+    expect(moveProjectItemToStage).toHaveBeenCalledWith(defaultProject, "item-500", "Done");
+  });
 });

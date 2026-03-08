@@ -84,6 +84,20 @@ function inferStageForOpenIssue(issue: IssueSummary): ProjectWorkflowStage {
   return "Planning";
 }
 
+function resolveReconciledStage(issue: IssueSummary, currentBoardStage: ProjectWorkflowStage | null): ProjectWorkflowStage | null {
+  const inferredStage = inferStageForOpenIssue(issue);
+
+  if (inferredStage === "Done") {
+    return "Done";
+  }
+
+  if (currentBoardStage === null) {
+    return inferredStage;
+  }
+
+  return currentBoardStage;
+}
+
 function normalizeBoardItem(project: ProjectRecord, item: ProjectBoardIssueItem): StagedWorkItem | null {
   if (item.stage === null) {
     return null;
@@ -120,13 +134,13 @@ async function reconcileProjectIssuesOntoBoard(options: {
       itemsByIssueNumber.set(openIssue.number, boardItem);
     }
 
-    const inferredStage = inferStageForOpenIssue(openIssue);
-    if (boardItem.stage !== inferredStage) {
-      await options.boardsClient.moveProjectItemToStage(options.project, boardItem.itemId, inferredStage);
+    const reconciledStage = resolveReconciledStage(openIssue, boardItem.stage);
+    if (reconciledStage !== null && boardItem.stage !== reconciledStage) {
+      await options.boardsClient.moveProjectItemToStage(options.project, boardItem.itemId, reconciledStage);
       itemsByIssueNumber.set(openIssue.number, {
         ...boardItem,
-        stage: inferredStage,
-        stageOptionId: options.project.workflow.stageOptionIds[inferredStage] ?? null,
+        stage: reconciledStage,
+        stageOptionId: options.project.workflow.stageOptionIds[reconciledStage] ?? null,
       });
     }
   }
