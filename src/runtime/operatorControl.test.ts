@@ -1092,27 +1092,30 @@ describe("operatorControl", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const onStartProject = vi.fn().mockResolvedValue({
       ok: true,
-      action: "created",
-      message: "Created provisioning issue #556 for project `habit-cli`.",
+      action: "resumed",
+      message: "Resumed existing project `habit-cli`.",
       project: {
         displayName: "Habit CLI",
         slug: "habit-cli",
         repositoryName: "habit-cli",
+        repositoryUrl: "https://github.com/evolvo-auto/habit-cli",
         workspacePath: "/home/paddy/habit-cli",
-        status: "provisioning",
-      },
-      trackerIssue: {
-        number: 556,
-        url: "https://github.com/evolvo-auto/evolvo-ts/issues/556",
-        alreadyOpen: false,
+        status: "active",
       },
     });
+    const onListRegisteredProjects = vi.fn().mockResolvedValue([
+      {
+        slug: "habit-cli",
+        displayName: "Habit CLI",
+        status: "active",
+      },
+    ]);
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
             createDiscordControlMessage(9401, "quit after current task", "operator-1"),
-            createDiscordControlMessage(9402, "startProject new Habit CLI", "operator-1"),
+            createDiscordControlMessage(9402, "startProject existing Habit CLI", "operator-1"),
           ]),
           { status: 200 },
         ),
@@ -1122,7 +1125,7 @@ describe("operatorControl", () => {
         new Response(
           JSON.stringify([
             createDiscordControlMessage(9401, "quit after current task", "operator-1"),
-            createDiscordControlMessage(9402, "startProject new Habit CLI", "operator-1"),
+            createDiscordControlMessage(9402, "startProject existing Habit CLI", "operator-1"),
           ]),
           { status: 200 },
         ),
@@ -1131,7 +1134,7 @@ describe("operatorControl", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-replayed-start-project" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);
 
-    const firstRequest = await pollDiscordGracefulShutdownCommand(workDir, { onStartProject });
+    const firstRequest = await pollDiscordGracefulShutdownCommand(workDir, { onStartProject, onListRegisteredProjects });
 
     expect(firstRequest).toBeNull();
     expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("9400");
@@ -1142,7 +1145,7 @@ describe("operatorControl", () => {
 
     recordReceiptSpy.mockRestore();
 
-    const replayedRequest = await pollDiscordGracefulShutdownCommand(workDir, { onStartProject });
+    const replayedRequest = await pollDiscordGracefulShutdownCommand(workDir, { onStartProject, onListRegisteredProjects });
 
     expect(replayedRequest).toEqual({
       version: 1,
@@ -1158,7 +1161,7 @@ describe("operatorControl", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(5);
   });
 
-  it("queues an authorized startProject request and acknowledges the created tracker issue", async () => {
+  it("rejects an authorized startProject request when no registered projects are available", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1166,50 +1169,25 @@ describe("operatorControl", () => {
     vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
     vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
 
-    const onStartProject = vi.fn().mockResolvedValue({
-      ok: true,
-      action: "created",
-      message: "Created provisioning issue #555 for project `habit-cli`. Canonical workspace: `/home/paddy/habit-cli`.",
-      project: {
-        displayName: "Habit CLI",
-        slug: "habit-cli",
-        repositoryName: "habit-cli",
-        workspacePath: "/home/paddy/habit-cli",
-        status: "provisioning",
-      },
-      trackerIssue: {
-        number: 555,
-        url: "https://github.com/evolvo-auto/evolvo-ts/issues/555",
-        alreadyOpen: false,
-      },
-    });
+    const onStartProject = vi.fn();
+    const onListRegisteredProjects = vi.fn().mockResolvedValue([]);
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(
         new Response(JSON.stringify([{ id: "7100", content: "boot", author: { id: "someone" } }]), { status: 200 }),
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7101", content: "startProject new Habit CLI", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "7101", content: "startProject existing Habit CLI", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-2" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);
 
-    const request = await pollDiscordGracefulShutdownCommand(workDir, { onStartProject });
+    const request = await pollDiscordGracefulShutdownCommand(workDir, { onStartProject, onListRegisteredProjects });
 
     expect(request).toBeNull();
-    expect(onStartProject).toHaveBeenCalledWith({
-      messageId: "7101",
-      requestedAt: expect.any(String),
-      requestedBy: "discord:operator-1",
-      mode: "new",
-      displayName: "Habit CLI",
-      slug: "habit-cli",
-      repositoryName: "habit-cli",
-      issueLabel: "project:habit-cli",
-      workspacePath: "/home/paddy/habit-cli",
-    });
+    expect(onStartProject).not.toHaveBeenCalled();
     expect(fetchSpy).toHaveBeenNthCalledWith(
       3,
       "https://discord.com/api/v10/channels/channel-1/messages",
@@ -1217,12 +1195,10 @@ describe("operatorControl", () => {
         method: "POST",
         body: JSON.stringify({
           content: [
-            "<@operator-1> Created new project for `Habit CLI`.",
-            "Created provisioning issue #555 for project `habit-cli`. Canonical workspace: `/home/paddy/habit-cli`.",
-            "Tracker issue: #555 (https://github.com/evolvo-auto/evolvo-ts/issues/555)",
-            "Planned label: `project:habit-cli`",
-            "Planned repository: `habit-cli`",
-            "Planned workspace: `/home/paddy/habit-cli`",
+            "<@operator-1> Could not queue project start request for `Habit CLI`.",
+            "No registered projects are available to start.",
+            "Usage: `/startproject existing project:<registered-project>`",
+            "Plain-text fallback: `startProject existing <registered-project>`",
           ].join("\n"),
         }),
       }),
@@ -1681,9 +1657,9 @@ describe("operatorControl", () => {
         body: JSON.stringify({
           content: [
             "<@operator-1> Could not queue project start request for `<missing project name>`.",
-            "`startProject` requires an explicit path (`existing` or `new`).",
-            "Usage: `/startproject existing project:<registered-project>` or `/startproject new name:<project-name>`",
-            "Plain-text fallback: `startProject existing <registered-project>` or `startProject new <project-name>`",
+            "`startProject` requires the `existing` path and a registered project target.",
+            "Usage: `/startproject existing project:<registered-project>`",
+            "Plain-text fallback: `startProject existing <registered-project>`",
           ].join("\n"),
         }),
       }),
@@ -1733,9 +1709,9 @@ describe("operatorControl", () => {
         body: JSON.stringify({
           content: [
             "<@operator-1> Could not queue project start request for `Missing Project`.",
-            "Project `Missing Project` is not in the registered project set. Use an exact slug or display name, or use `startProject new <project-name>` to create one.",
-            "Usage: `/startproject existing project:<registered-project>` or `/startproject new name:<project-name>`",
-            "Plain-text fallback: `startProject existing <registered-project>` or `startProject new <project-name>`",
+            "Project `Missing Project` is not in the registered project set. Use an exact slug or display name.",
+            "Usage: `/startproject existing project:<registered-project>`",
+            "Plain-text fallback: `startProject existing <registered-project>`",
           ].join("\n"),
         }),
       }),
@@ -1961,7 +1937,7 @@ describe("operatorControl", () => {
     expect(result).toBeNull();
   });
 
-  it("handles an authorized /startproject new slash command and forwards the normalized project request", async () => {
+  it("rejects an authorized /startproject existing slash command when the selected project is not registered", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1969,64 +1945,42 @@ describe("operatorControl", () => {
     vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
     vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
 
-    const onStartProject = vi.fn().mockResolvedValue({
-      ok: true,
-      action: "created",
-      message: "Created provisioning issue #555 for project `habit-cli`. Canonical workspace: `/home/paddy/habit-cli`.",
-      project: {
-        displayName: "Habit CLI",
+    const onStartProject = vi.fn();
+    const onListRegisteredProjects = vi.fn().mockResolvedValue([
+      {
         slug: "habit-cli",
-        repositoryName: "habit-cli",
-        workspacePath: "/home/paddy/habit-cli",
-        status: "provisioning",
+        displayName: "Habit CLI",
+        status: "active",
       },
-      trackerIssue: {
-        number: 555,
-        url: "https://github.com/evolvo-auto/evolvo-ts/issues/555",
-        alreadyOpen: false,
-      },
-    });
+    ]);
     const interaction = createSlashInteraction({
       id: "slash-start-1",
       commandName: "startproject",
-      subcommand: "new",
+      subcommand: "existing",
       values: {
-        name: "Habit CLI",
+        project: "missing-project",
       },
     });
 
-    const result = await handleDiscordSlashCommandInteraction(interaction, workDir, { onStartProject });
-
-    expect(onStartProject).toHaveBeenCalledWith({
-      messageId: "slash-start-1",
-      requestedAt: expect.any(String),
-      requestedBy: "discord:operator-1",
-      mode: "new",
-      displayName: "Habit CLI",
-      slug: "habit-cli",
-      repositoryName: "habit-cli",
-      issueLabel: "project:habit-cli",
-      workspacePath: "/home/paddy/habit-cli",
+    const result = await handleDiscordSlashCommandInteraction(interaction, workDir, {
+      onStartProject,
+      onListRegisteredProjects,
     });
+
+    expect(onStartProject).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: [
-        "<@operator-1> Created new project for `Habit CLI`.",
-        "Created provisioning issue #555 for project `habit-cli`. Canonical workspace: `/home/paddy/habit-cli`.",
-        "Tracker issue: #555 (https://github.com/evolvo-auto/evolvo-ts/issues/555)",
-        "Planned label: `project:habit-cli`",
-        "Planned repository: `habit-cli`",
-        "Planned workspace: `/home/paddy/habit-cli`",
+        "<@operator-1> Could not queue project start request.",
+        "Project `missing-project` is not in the registered project set. Select from autocomplete suggestions.",
+        "Usage: `/startproject existing project:<registered-project>`",
       ].join("\n"),
     });
     expect(result).toEqual({
       gracefulShutdownRequest: null,
       replyContent: [
-        "<@operator-1> Created new project for `Habit CLI`.",
-        "Created provisioning issue #555 for project `habit-cli`. Canonical workspace: `/home/paddy/habit-cli`.",
-        "Tracker issue: #555 (https://github.com/evolvo-auto/evolvo-ts/issues/555)",
-        "Planned label: `project:habit-cli`",
-        "Planned repository: `habit-cli`",
-        "Planned workspace: `/home/paddy/habit-cli`",
+        "<@operator-1> Could not queue project start request.",
+        "Project `missing-project` is not in the registered project set. Select from autocomplete suggestions.",
+        "Usage: `/startproject existing project:<registered-project>`",
       ].join("\n"),
     });
   });

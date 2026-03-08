@@ -420,8 +420,10 @@ export async function handleStartProjectCommand(options: {
   requestedBy: string;
   requestedAt?: string;
   workspaceRoot?: string;
+  allowCreateIfMissing?: boolean;
 }): Promise<StartProjectCommandHandlingResult> {
   try {
+    const allowCreateIfMissing = options.allowCreateIfMissing ?? true;
     const normalized = normalizeProjectNameInput(options.projectName, {
       workspaceRoot: options.workspaceRoot,
     });
@@ -508,6 +510,13 @@ export async function handleStartProjectCommand(options: {
           alreadyOpen: false,
         },
       );
+    }
+
+    if (!allowCreateIfMissing) {
+      return {
+        ok: false,
+        message: `Project \`${normalized.slug}\` is not registered. Select a registered project and retry.`,
+      };
     }
 
     if (duplicateIssue) {

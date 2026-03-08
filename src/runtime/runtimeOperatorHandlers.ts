@@ -164,12 +164,9 @@ export function createDiscordControlHandlers(options: {
       }));
     },
     onStartProject: async (request) => {
-      const requestedMode = request.mode ?? "legacy";
-      const registry = requestedMode === "legacy"
-        ? null
-        : await readProjectRegistry(options.workDir, options.defaultProjectContext);
-      const existingProject = registry && request.slug ? findProjectBySlug(registry, request.slug) : null;
-      if (requestedMode === "existing" && existingProject === null) {
+      const registry = await readProjectRegistry(options.workDir, options.defaultProjectContext);
+      const existingProject = findProjectBySlug(registry, request.slug);
+      if (existingProject === null) {
         const message = `Project \`${request.slug || request.displayName}\` is not registered. Select a registered project with \`/startproject existing\`.`;
         console.error(`[startProject] failed for ${request.displayName}: ${message}`);
         return {
@@ -177,27 +174,24 @@ export function createDiscordControlHandlers(options: {
           message,
         };
       }
-      if (requestedMode === "new" && existingProject !== null) {
-        const message = `Project \`${existingProject.slug}\` is already registered. Use \`/startproject existing\` to resume it.`;
-        console.error(`[startProject] failed for ${request.displayName}: ${message}`);
-        return {
-          ok: false,
-          message,
-        };
-      }
-
-      const requestedProjectName = requestedMode === "existing" && existingProject !== null
-        ? existingProject.displayName
-        : request.displayName;
       const result = await handleStartProjectCommand({
         issueManager: options.issueManager,
         workDir: options.workDir,
         trackerOwner: options.trackerOwner,
         trackerRepo: options.trackerRepo,
-        projectName: requestedProjectName,
+        projectName: existingProject.displayName,
         requestedBy: request.requestedBy,
         requestedAt: request.requestedAt,
+        allowCreateIfMissing: false,
       });
+      if (result.ok && result.action === "created") {
+        const message = `Project \`${existingProject.slug}\` is not eligible for creation via \`startProject\`. Select a registered project with \`/startproject existing\`.`;
+        console.error(`[startProject] rejected unexpected create result for ${request.displayName}: ${message}`);
+        return {
+          ok: false,
+          message,
+        };
+      }
       if (result.ok) {
         await activateProjectInState({
           workDir: options.workDir,
@@ -207,9 +201,7 @@ export function createDiscordControlHandlers(options: {
           updatedAt: request.requestedAt,
         });
         console.log(
-          result.action === "created"
-            ? `[startProject] created new project flow for ${result.project.displayName} (${result.project.slug}) at ${result.project.workspacePath}.`
-            : `[startProject] resumed existing project ${result.project.displayName} (${result.project.slug}) with status ${result.project.status} at ${result.project.workspacePath}.`,
+          `[startProject] resumed existing project ${result.project.displayName} (${result.project.slug}) with status ${result.project.status} at ${result.project.workspacePath}.`,
         );
         console.log(`[projects] marked ${result.project.slug} as active in the multi-project set.`);
       } else {
@@ -237,9 +229,21 @@ export function createDiscordControlHandlers(options: {
 
       const projectActivityState = await readProjectActivityState(options.workDir);
       const currentProjectActivity = projectActivityState.projects.find((entry) => entry.slug === projectRecord.slug) ?? null;
+      const activeProjectsState = await readActiveProjectsState(options.workDir);
+      const isProjectActive = activeProjectsState.projects.some((entry) => entry.slug === projectRecord.slug);
 
       let result: StopProjectCommandResult;
-      if (request.mode === "when-project-complete") {
+      if (currentProjectActivity?.activityState === "stopped" || !isProjectActive) {
+        result = {
+          ok: true,
+          action: "already-stopped",
+          message: `Project \`${projectRecord.slug}\` is already halted. Use \`startProject existing <registered-project>\` to resume it later.`,
+          project: {
+            displayName: projectRecord.displayName,
+            slug: projectRecord.slug,
+          },
+        };
+      } else if (request.mode === "when-project-complete") {
         if (currentProjectActivity?.deferredStopMode === "when-project-complete") {
           result = {
             ok: true,
@@ -269,16 +273,6 @@ export function createDiscordControlHandlers(options: {
             },
           };
         }
-      } else if (currentProjectActivity?.activityState === "stopped") {
-        result = {
-          ok: true,
-          action: "already-stopped",
-          message: `Project \`${projectRecord.slug}\` is already halted. Use \`startProject existing <registered-project>\` to resume it later.`,
-          project: {
-            displayName: projectRecord.displayName,
-            slug: projectRecord.slug,
-          },
-        };
       } else {
         await setProjectActivityMode({
           workDir: options.workDir,

@@ -73,7 +73,6 @@ Outside the cycle-limit prompt, the live bot session now registers guild slash c
 
 - `/quit mode:after-current-task|after-tasks`
 - `/startproject existing project:<registered-project>`
-- `/startproject new name:<project-name>`
 - `/stopproject project:<registered-project> mode:now|whenComplete`
 
 Plain-text channel messages remain available as a fallback in the control channel:
@@ -81,7 +80,6 @@ Plain-text channel messages remain available as a fallback in the control channe
 - `quit after current task`
 - `quit after tasks`
 - `startProject existing <registered-project>`
-- `startProject new <project-name>`
 - `stopProject <registered-project> now|whenComplete`
 
 Vitest runs set `EVOLVO_DISCORD_TRANSPORT=disabled`, so automated tests never send live Discord messages and must exercise Discord behavior through mocks, spies, or other controlled doubles.

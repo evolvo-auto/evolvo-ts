@@ -41,7 +41,7 @@ export type StartProjectCommandRequest = {
   messageId: string;
   requestedAt: string;
   requestedBy: string;
-  mode: "legacy" | "existing" | "new";
+  mode: "existing";
   displayName: string;
   slug: string;
   repositoryName: string;
@@ -313,7 +313,6 @@ function parseGracefulShutdownCommand(
 type ParsedStartProjectRequest =
   | {
     ok: true;
-    mode: "existing" | "new";
     projectName: string;
   }
   | {
@@ -332,7 +331,7 @@ function parseStartProjectRequest(content: string): ParsedStartProjectRequest | 
   if (!suffix) {
     return {
       ok: false,
-      message: "`startProject` requires an explicit path (`existing` or `new`).",
+      message: "`startProject` requires the `existing` path and a registered project target.",
       projectName: null,
     };
   }
@@ -351,30 +350,13 @@ function parseStartProjectRequest(content: string): ParsedStartProjectRequest | 
 
     return {
       ok: true,
-      mode: "existing",
-      projectName,
-    };
-  }
-
-  if (path === "new") {
-    if (!projectName) {
-      return {
-        ok: false,
-        message: "`startProject new` requires a project name.",
-        projectName: null,
-      };
-    }
-
-    return {
-      ok: true,
-      mode: "new",
       projectName,
     };
   }
 
   return {
     ok: false,
-    message: "`startProject` requires an explicit path (`existing` or `new`).",
+    message: "`startProject` supports only `existing` and cannot create new projects.",
     projectName: suffix,
   };
 }
@@ -770,8 +752,8 @@ function buildStartupBootMessageContent(): string {
   return [
     "🤖 Evolvo runtime booted.",
     "Operator control is online in plain-text mode, and the live bot session will register slash commands when it connects.",
-    "Slash commands: `/status`, `/quit`, `/startproject existing project:<registered-project>`, `/startproject new name:<project-name>`, `/stopproject project:<registered-project> mode:now|whenComplete`.",
-    "Plain-text fallback: `status`, `quit after current task`, `quit after tasks`, `startProject existing <registered-project>`, `startProject new <project-name>`, `stopProject <registered-project> now|whenComplete`.",
+    "Slash commands: `/status`, `/quit`, `/startproject existing project:<registered-project>`, `/stopproject project:<registered-project> mode:now|whenComplete`.",
+    "Plain-text fallback: `status`, `quit after current task`, `quit after tasks`, `startProject existing <registered-project>`, `stopProject <registered-project> now|whenComplete`.",
     "When Evolvo posts a cycle-limit prompt, reply with `continue` or `quit`.",
     `Started at: ${startedAt}`,
   ].join("\n");
@@ -902,8 +884,8 @@ function buildStartProjectAcknowledgementContent(
     ? [
       `<@${operatorUserId}> Could not queue project start request for \`${request.displayName}\`.`,
       result.message,
-      "Usage: `/startproject existing project:<registered-project>` or `/startproject new name:<project-name>`",
-      "Plain-text fallback: `startProject existing <registered-project>` or `startProject new <project-name>`",
+      "Usage: `/startproject existing project:<registered-project>`",
+      "Plain-text fallback: `startProject existing <registered-project>`",
     ].join("\n")
     : result.action === "created"
       ? [
@@ -1232,7 +1214,7 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIChatInputApplicationC
     },
     {
       name: DISCORD_SLASH_COMMAND_NAMES.startProject,
-      description: "Start an existing project or create a new project",
+      description: "Start or resume a registered project",
       options: [
         {
           type: ApplicationCommandOptionType.Subcommand,
@@ -1245,19 +1227,6 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIChatInputApplicationC
               description: "Registered project",
               required: true,
               autocomplete: true,
-            },
-          ],
-        },
-        {
-          type: ApplicationCommandOptionType.Subcommand,
-          name: "new",
-          description: "Create and register a brand-new project",
-          options: [
-            {
-              type: ApplicationCommandOptionType.String,
-              name: "name",
-              description: "New project name",
-              required: true,
             },
           ],
         },
@@ -1527,9 +1496,9 @@ function buildProjectAutocompleteChoices(
   }));
 }
 
-function getStartProjectSubcommand(interaction: ChatInputCommandInteraction): "existing" | "new" | null {
+function getStartProjectSubcommand(interaction: ChatInputCommandInteraction): "existing" | null {
   const rawSubcommand = interaction.options.getSubcommand(true);
-  if (rawSubcommand === "existing" || rawSubcommand === "new") {
+  if (rawSubcommand === "existing") {
     return rawSubcommand;
   }
 
@@ -1638,7 +1607,7 @@ export async function handleDiscordSlashCommandInteraction(
       const replyContent = [
         `<@${config.operatorUserId}> Could not queue project start request.`,
         "Invalid startProject command path.",
-        "Usage: `/startproject existing project:<registered-project>` or `/startproject new name:<project-name>`",
+        "Usage: `/startproject existing project:<registered-project>`",
       ].join("\n");
       await interaction.editReply({ content: replyContent });
       return {
@@ -1653,37 +1622,25 @@ export async function handleDiscordSlashCommandInteraction(
       | null = null;
     let validationMessage: string | null = null;
 
-    if (startSubcommand === "existing") {
-      const selectedSlug = interaction.options.getString("project", true).trim();
-      const projects = await listRegisteredProjects(handlers);
-      if (projects.length === 0) {
-        validationMessage = "No registered projects are available to start. Use `/startproject new` to create one.";
-      } else {
-        const selectedProject = findRegisteredProjectBySlug(projects, selectedSlug);
-        if (selectedProject === null) {
-          validationMessage = `Project \`${selectedSlug}\` is not in the registered project set. Select from autocomplete suggestions.`;
-        } else {
-          processed = await processStartProjectControlCommand(
-            workDir,
-            interaction.id,
-            selectedProject.displayName,
-            "existing",
-            requestedBy,
-            handlers,
-            { registeredProjectSlug: selectedProject.slug },
-          );
-        }
-      }
+    const selectedSlug = interaction.options.getString("project", true).trim();
+    const projects = await listRegisteredProjects(handlers);
+    if (projects.length === 0) {
+      validationMessage = "No registered projects are available to start.";
     } else {
-      const requestedProjectName = interaction.options.getString("name", true);
-      processed = await processStartProjectControlCommand(
-        workDir,
-        interaction.id,
-        requestedProjectName,
-        "new",
-        requestedBy,
-        handlers,
-      );
+      const selectedProject = findRegisteredProjectBySlug(projects, selectedSlug);
+      if (selectedProject === null) {
+        validationMessage = `Project \`${selectedSlug}\` is not in the registered project set. Select from autocomplete suggestions.`;
+      } else {
+        processed = await processStartProjectControlCommand(
+          workDir,
+          interaction.id,
+          selectedProject.displayName,
+          "existing",
+          requestedBy,
+          handlers,
+          { registeredProjectSlug: selectedProject.slug },
+        );
+      }
     }
 
     const replyContent = processed
@@ -1693,7 +1650,7 @@ export async function handleDiscordSlashCommandInteraction(
       : [
         `<@${config.operatorUserId}> Could not queue project start request.`,
         validationMessage ?? "Unknown project start request error.",
-        "Usage: `/startproject existing project:<registered-project>` or `/startproject new name:<project-name>`",
+        "Usage: `/startproject existing project:<registered-project>`",
       ].join("\n");
     await interaction.editReply({ content: replyContent });
     return {
@@ -2053,18 +2010,29 @@ export async function pollDiscordGracefulShutdownCommand(
           | null = null;
 
         if (parsedStartRequest.ok) {
-          if (parsedStartRequest.mode === "new") {
-            processed = await processStartProjectControlCommand(
-              workDir,
-              message.id,
-              parsedStartRequest.projectName,
-              "new",
-              `discord:${config.operatorUserId}`,
-              handlers,
-            );
+          const projects = await listRegisteredProjects(handlers);
+          if (projects.length === 0) {
+            processed = {
+              duplicate: false,
+              request: {
+                messageId: message.id,
+                requestedAt: new Date().toISOString(),
+                requestedBy: `discord:${config.operatorUserId}`,
+                mode: "existing",
+                displayName: parsedStartRequest.projectName,
+                slug: "",
+                repositoryName: "",
+                issueLabel: "",
+                workspacePath: "",
+              },
+              result: {
+                ok: false,
+                message: "No registered projects are available to start.",
+              },
+            };
           } else {
-            const projects = await listRegisteredProjects(handlers);
-            if (projects.length === 0) {
+            const selectedProject = findRegisteredProjectByInput(projects, parsedStartRequest.projectName);
+            if (selectedProject === null) {
               processed = {
                 duplicate: false,
                 request: {
@@ -2080,41 +2048,19 @@ export async function pollDiscordGracefulShutdownCommand(
                 },
                 result: {
                   ok: false,
-                  message: "No registered projects are available to start. Use `startProject new <project-name>` to create one.",
+                  message: `Project \`${parsedStartRequest.projectName}\` is not in the registered project set. Use an exact slug or display name.`,
                 },
               };
             } else {
-              const selectedProject = findRegisteredProjectByInput(projects, parsedStartRequest.projectName);
-              if (selectedProject === null) {
-                processed = {
-                  duplicate: false,
-                  request: {
-                    messageId: message.id,
-                    requestedAt: new Date().toISOString(),
-                    requestedBy: `discord:${config.operatorUserId}`,
-                    mode: "existing",
-                    displayName: parsedStartRequest.projectName,
-                    slug: "",
-                    repositoryName: "",
-                    issueLabel: "",
-                    workspacePath: "",
-                  },
-                  result: {
-                    ok: false,
-                    message: `Project \`${parsedStartRequest.projectName}\` is not in the registered project set. Use an exact slug or display name, or use \`startProject new <project-name>\` to create one.`,
-                  },
-                };
-              } else {
-                processed = await processStartProjectControlCommand(
-                  workDir,
-                  message.id,
-                  selectedProject.displayName,
-                  "existing",
-                  `discord:${config.operatorUserId}`,
-                  handlers,
-                  { registeredProjectSlug: selectedProject.slug },
-                );
-              }
+              processed = await processStartProjectControlCommand(
+                workDir,
+                message.id,
+                selectedProject.displayName,
+                "existing",
+                `discord:${config.operatorUserId}`,
+                handlers,
+                { registeredProjectSlug: selectedProject.slug },
+              );
             }
           }
         } else {
@@ -2124,7 +2070,7 @@ export async function pollDiscordGracefulShutdownCommand(
               messageId: message.id,
               requestedAt: new Date().toISOString(),
               requestedBy: `discord:${config.operatorUserId}`,
-              mode: "legacy",
+              mode: "existing",
               displayName: parsedStartRequest.projectName ?? "<missing project name>",
               slug: "",
               repositoryName: "",
