@@ -2,7 +2,10 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { hasIssueLabel, isChallengeIssue } from "../issues/challengeIssue.js";
 import type { IssueSummary } from "../issues/taskIssueManager.js";
-import { readRecoverableJsonState } from "../runtime/localStateFile.js";
+import {
+  readRecoverableJsonState,
+  type RecoverableJsonStateNormalizationResult,
+} from "../runtime/localStateFile.js";
 
 const EVOLVO_DIRECTORY_NAME = ".evolvo";
 const CHALLENGE_RETRY_STATE_FILE_NAME = "challenge-retry-state.json";
@@ -63,23 +66,43 @@ function toFiniteNonNegativeInteger(value: unknown): number {
   return Math.floor(asNumber);
 }
 
-function normalizeRetryState(state: unknown): ChallengeRetryState {
+function normalizeRetryState(state: unknown): RecoverableJsonStateNormalizationResult<ChallengeRetryState> {
   if (typeof state !== "object" || state === null) {
-    return createDefaultRetryState();
+    return {
+      state: createDefaultRetryState(),
+      recoveredInvalid: true,
+    };
   }
 
+  let recoveredInvalid = false;
+  const candidate = state as Partial<ChallengeRetryState>;
+  if (candidate.failuresByChallenge !== undefined && (typeof candidate.failuresByChallenge !== "object" || candidate.failuresByChallenge === null)) {
+    recoveredInvalid = true;
+  }
   const failuresByChallenge = Object.fromEntries(
-    Object.entries((state as Partial<ChallengeRetryState>).failuresByChallenge ?? {})
+    Object.entries(candidate.failuresByChallenge ?? {})
       .map(([challengeNumber, value]) => {
         const attempts = toFiniteNonNegativeInteger(value?.attempts);
         const lastFailureAtMs = toFiniteNonNegativeInteger(value?.lastFailureAtMs);
+        if (
+          typeof value !== "object" ||
+          value === null ||
+          attempts <= 0 ||
+          attempts !== value.attempts ||
+          lastFailureAtMs !== value.lastFailureAtMs
+        ) {
+          recoveredInvalid = true;
+        }
         return [challengeNumber, { attempts, lastFailureAtMs }] as const;
       })
       .filter(([, value]) => value.attempts > 0)
       .sort(([left], [right]) => left.localeCompare(right)),
   );
 
-  return { failuresByChallenge };
+  return {
+    state: { failuresByChallenge },
+    recoveredInvalid,
+  };
 }
 
 function getRetryStatePath(workDir: string): string {
@@ -122,7 +145,7 @@ async function writeChallengeRetryState(workDir: string, state: ChallengeRetrySt
   await fs.mkdir(join(workDir, EVOLVO_DIRECTORY_NAME), { recursive: true });
   await fs.writeFile(
     getRetryStatePath(workDir),
-    `${JSON.stringify(normalizeRetryState(state), null, 2)}\n`,
+    `${JSON.stringify(normalizeRetryState(state).state, null, 2)}\n`,
     "utf8",
   );
 }
@@ -145,7 +168,7 @@ export async function recordChallengeAttemptOutcome(
     };
   }
 
-  const normalized = normalizeRetryState(state);
+  const normalized = normalizeRetryState(state).state;
   await writeChallengeRetryState(workDir, normalized);
   return normalized;
 }

@@ -206,4 +206,59 @@ describe("challengeMetrics", () => {
       `Recovered malformed challenge metrics store at ${statePath}; preserved corrupt file at ${corruptPath}.`,
     );
   });
+
+  it("archives parseable but invalid metrics payloads before normalizing them", async () => {
+    vi.useFakeTimers();
+    const recoveryAtMs = new Date("2026-03-08T00:40:00.000Z").getTime();
+    vi.setSystemTime(recoveryAtMs);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const evolvoDir = join(workDir, ".evolvo");
+    const statePath = join(evolvoDir, "challenge-metrics.json");
+    const corruptPath = join(evolvoDir, `challenge-metrics.corrupt-${recoveryAtMs}.json`);
+    const invalidPayload = {
+      total: -1,
+      success: 2,
+      failure: "oops",
+      attemptsToSuccess: {
+        total: 3,
+        samples: 0,
+        average: 99,
+      },
+      categoryCounts: {
+        "": 4,
+        kept: 2,
+      },
+      pendingAttemptsByChallenge: {
+        bad: -2,
+        101: 1,
+      },
+    };
+    await mkdir(evolvoDir, { recursive: true });
+    await writeFile(statePath, JSON.stringify(invalidPayload), "utf8");
+
+    const metrics = await readChallengeMetrics(workDir);
+
+    expect(metrics).toEqual({
+      total: 0,
+      success: 2,
+      failure: 0,
+      attemptsToSuccess: {
+        total: 3,
+        samples: 0,
+        average: 0,
+      },
+      categoryCounts: {
+        kept: 2,
+      },
+      pendingAttemptsByChallenge: {
+        101: 1,
+      },
+    });
+    expect(await readFile(corruptPath, "utf8")).toBe(JSON.stringify(invalidPayload));
+    expect(warnSpy).toHaveBeenCalledWith(
+      `Recovered invalid challenge metrics store at ${statePath}; preserved corrupt file at ${corruptPath}.`,
+    );
+  });
 });

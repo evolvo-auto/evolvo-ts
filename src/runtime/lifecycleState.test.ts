@@ -183,12 +183,19 @@ describe("lifecycleState", () => {
     expect(state.issues["77"]?.state).toBe("completed");
   });
 
-  it("normalizes malformed persisted state", async () => {
+  it("archives parseable but invalid persisted state before normalizing it", async () => {
+    vi.useFakeTimers();
+    const recoveryAtMs = new Date("2026-03-08T00:30:00.000Z").getTime();
+    vi.setSystemTime(recoveryAtMs);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
-    await mkdir(join(workDir, ".evolvo"), { recursive: true });
+    const evolvoDir = join(workDir, ".evolvo");
+    const statePath = join(evolvoDir, "runtime-lifecycle-state.json");
+    const corruptPath = join(evolvoDir, `runtime-lifecycle-state.corrupt-${recoveryAtMs}.json`);
+    await mkdir(evolvoDir, { recursive: true });
     await writeFile(
-      join(workDir, ".evolvo", "runtime-lifecycle-state.json"),
+      statePath,
       JSON.stringify({
         version: 0,
         issues: {
@@ -210,6 +217,25 @@ describe("lifecycleState", () => {
     expect(Object.keys(state.issues)).toEqual(["12"]);
     expect(state.issues["12"]?.state).toBe("blocked");
     expect(state.version).toBe(1);
+    expect(await readFile(corruptPath, "utf8")).toBe(
+      JSON.stringify({
+        version: 0,
+        issues: {
+          abc: { state: "unknown" },
+          12: {
+            issueNumber: 12,
+            kind: "challenge",
+            state: "blocked",
+            updatedAt: "2020-01-01T00:00:00.000Z",
+            transitionCount: 2,
+            history: [{ from: null, to: "blocked", at: "2020-01-01T00:00:00.000Z", reason: "x", runCycle: 1 }],
+          },
+        },
+      }),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      `Recovered invalid lifecycle state store at ${statePath}; preserved corrupt file at ${corruptPath}.`,
+    );
   });
 
   it("preserves malformed lifecycle state JSON and resets to a default store", async () => {
