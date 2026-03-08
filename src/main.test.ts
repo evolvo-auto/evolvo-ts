@@ -993,6 +993,8 @@ describe("main", () => {
       issue: {
         number: 12,
         title: "Fix login redirect",
+        repository: "owner/repo",
+        url: "https://github.com/owner/repo/issues/12",
       },
       executionContext: {
         trackerRepository: "owner/repo",
@@ -1099,6 +1101,8 @@ describe("main", () => {
       issue: {
         number: 14,
         title: "Managed repo issue",
+        repository: "owner/repo",
+        url: "https://github.com/owner/repo/issues/14",
       },
       executionContext: {
         trackerRepository: "tracker-org/issue-tracker",
@@ -1417,6 +1421,14 @@ describe("main", () => {
     expect(runPlannerAgentMock).toHaveBeenCalledWith(expect.objectContaining({
       openIssueCount: 0,
       workDir: "/home/paddy/habit-cli",
+    }));
+    expect(notifyIssueStartedInDiscordMock).toHaveBeenCalledWith(expect.objectContaining({
+      issue: {
+        number: 31,
+        title: "Generated project follow-up",
+        repository: "owner/habit-cli",
+        url: "https://github.com/owner/habit-cli/issues/31",
+      },
     }));
     expect(markInProgressMock).toHaveBeenCalledWith(31);
     expect(runCodingAgentMock).toHaveBeenCalledWith(

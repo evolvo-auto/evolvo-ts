@@ -829,6 +829,8 @@ export async function main(): Promise<void> {
               issue: {
                 number: selectedIssue.number,
                 title: selectedIssue.title,
+                repository: selectedIssue.repository.reference,
+                url: `${selectedIssue.repository.url}/issues/${selectedIssue.number}`,
               },
               executionContext: {
                 trackerRepository: executionContext.trackerRepository,
