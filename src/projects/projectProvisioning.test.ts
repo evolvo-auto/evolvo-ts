@@ -401,8 +401,23 @@ describe("projectProvisioning", () => {
       requestedBy: "discord:operator-1",
       source: "start-project-command",
     });
+    const registry = JSON.parse(await readFile(getProjectRegistryPath(workDir), "utf8")) as {
+      projects: Array<{ slug: string; trackerRepo: { owner: string; repo: string; url: string } }>;
+    };
+    expect(registry.projects.find((project) => project.slug === "habit-cli")).toEqual(
+      expect.objectContaining({
+        trackerRepo: {
+          owner: "evolvo-auto",
+          repo: "habit-cli",
+          url: "https://github.com/evolvo-auto/habit-cli",
+        },
+      }),
+    );
     expect(logSpy).toHaveBeenCalledWith(
       `[project-workspace] resolved ${createManagedWorkspacePath(workDir)}; reused existing directory; ${createManagedWorkspacePath(workDir)} is now the active working directory for project habit-cli.`,
+    );
+    expect(logSpy).toHaveBeenCalledWith(
+      "[project-registry] corrected tracker repository for project habit-cli; projects.json now records evolvo-auto/habit-cli.",
     );
   });
 
@@ -647,6 +662,11 @@ describe("projectProvisioning", () => {
     expect(result.ok).toBe(true);
     expect(result.failureStep).toBeNull();
     expect(result.record.status).toBe("active");
+    expect(result.record.trackerRepo).toEqual({
+      owner: "evolvo-auto",
+      repo: "habit-cli",
+      url: "https://github.com/evolvo-auto/habit-cli",
+    });
     expect(result.record.provisioning).toEqual({
       labelCreated: true,
       repoCreated: true,
@@ -666,13 +686,23 @@ describe("projectProvisioning", () => {
     expect(buildProjectProvisioningOutcomeComment(result)).toContain("- Deployment: skipped for `evolvo-auto/habit-cli`.");
 
     const registry = JSON.parse(await readFile(getProjectRegistryPath(workDir), "utf8")) as {
-      projects: Array<{ slug: string; status: string; provisioning: { repoCreated: boolean } }>;
+      projects: Array<{
+        slug: string;
+        status: string;
+        trackerRepo: { owner: string; repo: string; url: string };
+        provisioning: { repoCreated: boolean };
+      }>;
     };
     const managedProject = registry.projects.find((project) => project.slug === "habit-cli");
     expect(managedProject).toEqual(
       expect.objectContaining({
         slug: "habit-cli",
         status: "active",
+        trackerRepo: {
+          owner: "evolvo-auto",
+          repo: "habit-cli",
+          url: "https://github.com/evolvo-auto/habit-cli",
+        },
         provisioning: expect.objectContaining({
           repoCreated: true,
         }),
@@ -690,6 +720,9 @@ describe("projectProvisioning", () => {
     });
     expect(logSpy).toHaveBeenCalledWith(
       `[project-workspace] resolved ${createManagedWorkspacePath(workDir)}; created directory; ${createManagedWorkspacePath(workDir)} is now the active working directory for project habit-cli.`,
+    );
+    expect(logSpy).toHaveBeenCalledWith(
+      "[project-registry] project habit-cli repository created: evolvo-auto/habit-cli; tracker repository written to projects.json: evolvo-auto/habit-cli.",
     );
     expect(deployRepository).toHaveBeenCalledWith({
       repository: {
