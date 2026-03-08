@@ -34,6 +34,7 @@ describe("operatorControl", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.stubEnv("EVOLVO_DISCORD_TRANSPORT", "live");
   });
 
   afterEach(async () => {
@@ -46,6 +47,30 @@ describe("operatorControl", () => {
 
   it("returns null config when required Discord environment variables are missing", () => {
     expect(getDiscordControlConfigFromEnv({})).toBeNull();
+  });
+
+  it("returns null config when Discord transport is explicitly disabled", () => {
+    expect(getDiscordControlConfigFromEnv({
+      DISCORD_BOT_TOKEN: "bot-token",
+      DISCORD_CONTROL_GUILD_ID: "guild-1",
+      DISCORD_CONTROL_CHANNEL_ID: "channel-1",
+      DISCORD_OPERATOR_USER_ID: "operator-1",
+      EVOLVO_DISCORD_TRANSPORT: "disabled",
+    })).toBeNull();
+  });
+
+  it("skips Discord startup checks entirely when Discord transport is disabled", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+    vi.stubEnv("EVOLVO_DISCORD_TRANSPORT", "disabled");
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await runDiscordOperatorControlStartupCheck();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("returns null decision when Discord operator control is not configured", async () => {

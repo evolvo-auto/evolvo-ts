@@ -47,6 +47,8 @@ Outside the cycle-limit prompt, Discord operator control is explicit plain-text 
 - `startProject <project-name>`
 - `stopProject`
 
+Vitest runs set `EVOLVO_DISCORD_TRANSPORT=disabled`, so automated tests never send live Discord messages and must exercise Discord behavior through mocks, spies, or other controlled doubles.
+
 If Discord vars are not configured, Evolvo does not attempt Discord and keeps existing non-Discord behavior.
 
 ## Startup Flow

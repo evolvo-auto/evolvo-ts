@@ -177,9 +177,17 @@ function parsePositiveIntegerEnv(
   return parsed;
 }
 
+function isDiscordTransportDisabled(env: NodeJS.ProcessEnv): boolean {
+  return env.EVOLVO_DISCORD_TRANSPORT?.trim().toLowerCase() === "disabled";
+}
+
 export function getDiscordControlConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): DiscordControlConfig | null {
+  if (isDiscordTransportDisabled(env)) {
+    return null;
+  }
+
   const botToken = getRequiredTrimmedEnv("DISCORD_BOT_TOKEN", env);
   const guildId = getRequiredTrimmedEnv("DISCORD_CONTROL_GUILD_ID", env);
   const controlChannelId = getRequiredTrimmedEnv("DISCORD_CONTROL_CHANNEL_ID", env);
