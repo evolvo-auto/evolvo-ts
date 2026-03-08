@@ -1,14 +1,43 @@
 # evolvo-ts
 
-`evolvo-ts` is a self-improving runtime that pulls GitHub issues, executes one bounded improvement cycle at a time through Codex, and continues until the queue is exhausted or a merge triggers restart.
+`evolvo-ts` is a self-improving runtime that supervises a staged GitHub workflow, runs specialized workers against that board, and keeps improving tracked projects until queues drain or an operator changes course.
 
 ## Runtime Overview
 
 1. Load required environment variables from `.env`.
 2. Accept optional issue CLI commands (`issues ...`) for manual queue operations.
-3. Start the main issue loop (max `25` cycles per process).
-4. Select one actionable issue and run a coding cycle.
-5. If a pull request is merged, run post-merge restart workflow and exit.
+3. Start the supervised runtime.
+4. Launch and monitor worker processes for issue generation, planning, development, review, and release.
+5. Reconcile stale worker leases or expired board claims.
+6. Continue until the operator stops the runtime or work naturally drains.
+
+## Supervised Worker Runtime
+
+The runtime now uses a supervisor plus long-lived child workers instead of a single monolithic issue loop.
+
+- Supervisor responsibilities:
+   - compute desired worker inventory
+   - start, stop, and restart workers
+   - reconcile stale worker heartbeats and stale board claims
+   - surface runtime status to Discord/operator commands
+- Worker roles:
+   - `issue-generator`: keeps `Inbox` supplied with new candidate work
+   - `planner`: moves ideas through `Planning` into `Ready for Dev`
+   - `dev`: claims `In Dev` work and runs implementation
+   - `review`: processes `In Review`
+   - `release`: processes `Releasing` / release-ready work
+- Shared state:
+   - GitHub Projects V2 board columns remain the source of truth for staged work
+   - local worker state tracks heartbeats, claims, leases, and restart counts
+
+Current status output now includes:
+
+- runtime state and work mode
+- active projects / active issue
+- cycle budget
+- per-column queue totals
+- live worker inventory
+- configured workflow limits
 
 ## Required Environment
 
@@ -58,23 +87,30 @@ Vitest runs set `EVOLVO_DISCORD_TRANSPORT=disabled`, so automated tests never se
 
 If Discord vars are not configured, Evolvo does not attempt Discord and keeps existing non-Discord behavior.
 
+### Workflow Limit Tuning
+
+The staged workflow queue targets can be tuned from `.env`:
+
+- `EVOLVO_IDEA_STAGE_TARGET_PER_PROJECT` (default `5`)
+- `EVOLVO_ISSUE_GENERATOR_MAX_ISSUES_PER_PROJECT` (default `5`)
+- `EVOLVO_PLANNING_LIMIT_PER_PROJECT` (default `5`)
+- `EVOLVO_READY_FOR_DEV_LIMIT_PER_PROJECT` (default `3`)
+- `EVOLVO_IN_DEV_LIMIT_PER_PROJECT` (default `1`)
+
+These control how much work each worker is allowed to keep in its corresponding board stage per project.
+
 ## Startup Flow
 
 On `pnpm dev` / `pnpm start`, the runtime:
 
 1. Tries issue command handling first (`issues create|list|start|comment|complete|close`).
-2. Creates a GitHub issue manager using configured `GITHUB_OWNER` and `GITHUB_REPO`.
-3. Loads open issues from GitHub.
-4. Closes issues labeled as outdated (`outdated`, `obsolete`, `wontfix`, `invalid`, `duplicate`).
-5. Picks one issue for work:
-   - prefer an issue labeled `in progress`
-   - otherwise pick the first non-`completed` issue
-6. If no actionable issue exists:
-   - on first cycle with zero open issues, bootstrap repository-derived issue candidates from a full repository scan
-   - otherwise replenish queue with a minimum target of `3` open tasks and a hard cap of `5` open tasks
-7. Builds the prompt from selected issue title + description and executes a Codex run.
+2. Builds runtime services for GitHub issues, pull requests, project board access, and local runtime state.
+3. Starts the supervisor runtime.
+4. Restores worker state and reconciles stale claims if needed.
+5. Launches the desired worker set.
+6. Loops on supervision, status publication, and worker recovery.
 
-If no issue can be selected and no new issues are created, the runtime stops cleanly.
+If the runtime is invoked as a worker command, the matching child worker process runs its role-specific pass loop instead.
 
 ## Issue Lifecycle (Single Issue)
 

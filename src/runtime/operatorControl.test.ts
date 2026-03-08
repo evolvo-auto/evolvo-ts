@@ -34,6 +34,7 @@ function createDiscordControlMessage(id: number, content: string, authorId = "so
 function createSlashInteraction(options: {
   id?: string;
   commandName: string;
+  subcommand?: string;
   guildId?: string | null;
   channelId?: string | null;
   userId?: string;
@@ -52,6 +53,7 @@ function createSlashInteraction(options: {
     },
     options: {
       getString: (name: string): string | null => options.values?.[name] ?? null,
+      getSubcommand: (): string => options.subcommand ?? "existing",
     },
     reply: vi.fn(async (_payload: unknown) => {
       replied = true;
@@ -1201,6 +1203,7 @@ describe("operatorControl", () => {
       messageId: "7101",
       requestedAt: expect.any(String),
       requestedBy: "discord:operator-1",
+      mode: "legacy",
       displayName: "Habit CLI",
       slug: "habit-cli",
       repositoryName: "habit-cli",
@@ -1370,7 +1373,7 @@ describe("operatorControl", () => {
           content: [
             "<@operator-1> Could not stop the requested project.",
             "`stopProject` requires a project name.",
-            "Usage: `stopProject <project-name>` or `stopProject <project-name> whenProjectComplete`",
+            "Usage: `/stopproject project:<registered-project> mode:now|whenComplete`",
           ].join("\n"),
         }),
       }),
@@ -1477,6 +1480,41 @@ describe("operatorControl", () => {
           limit: 10,
           remaining: 6,
         },
+        queueTotals: {
+          Inbox: 1,
+          Planning: 2,
+          "Ready for Dev": 3,
+          "In Dev": 1,
+          "Ready for Review": 0,
+          "In Review": 1,
+          "Ready for Release": 0,
+          Releasing: 0,
+          Blocked: 1,
+          Done: 9,
+        },
+        workers: [
+          {
+            workerId: "planner-1",
+            role: "planner",
+            projectSlug: null,
+            claim: "#17 Planning",
+            restartCount: 1,
+          },
+          {
+            workerId: "dev-habit-cli",
+            role: "dev",
+            projectSlug: "habit-cli",
+            claim: null,
+            restartCount: 0,
+          },
+        ],
+        limits: {
+          ideaStageTargetPerProject: 5,
+          issueGeneratorMaxIssuesPerProject: 5,
+          planningLimitPerProject: 5,
+          readyForDevLimitPerProject: 3,
+          inDevLimitPerProject: 1,
+        },
       },
     });
     const fetchSpy = vi.fn()
@@ -1516,6 +1554,9 @@ describe("operatorControl", () => {
             "Lifecycle: selected -> executing",
             "Deferred stop: current project will stop when complete, then Evolvo will return to self-work.",
             "Cycle: 4 of 10 (6 remaining after this cycle)",
+            "Queues: Inbox 1 | Planning 2 | Ready for Dev 3 | In Dev 1 | Ready for Review 0 | In Review 1 | Ready for Release 0 | Releasing 0 | Blocked 1 | Done 9",
+            "Workers: planner planner-1 (#17 Planning) r1, dev/habit-cli dev-habit-cli (idle)",
+            "Limits: ideaTarget=5 issueGenBatch=5 planning=5 readyForDev=3 inDev=1",
           ].join("\n"),
         }),
       }),
@@ -1556,7 +1597,7 @@ describe("operatorControl", () => {
           content: [
             "<@operator-1> Could not queue project start request for `<missing project name>`.",
             "Project name is required.",
-            "Usage: `startProject <project-name>`",
+            "Usage: `/startproject existing project:<registered-project>` or `/startproject new name:<project-name>`",
           ].join("\n"),
         }),
       }),
@@ -1782,7 +1823,7 @@ describe("operatorControl", () => {
     expect(result).toBeNull();
   });
 
-  it("handles an authorized /startproject slash command and forwards the normalized project request", async () => {
+  it("handles an authorized /startproject new slash command and forwards the normalized project request", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1810,6 +1851,7 @@ describe("operatorControl", () => {
     const interaction = createSlashInteraction({
       id: "slash-start-1",
       commandName: "startproject",
+      subcommand: "new",
       values: {
         name: "Habit CLI",
       },
@@ -1821,6 +1863,7 @@ describe("operatorControl", () => {
       messageId: "slash-start-1",
       requestedAt: expect.any(String),
       requestedBy: "discord:operator-1",
+      mode: "new",
       displayName: "Habit CLI",
       slug: "habit-cli",
       repositoryName: "habit-cli",
@@ -1850,6 +1893,71 @@ describe("operatorControl", () => {
     });
   });
 
+  it("handles an authorized /startproject existing slash command with a registered project target", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const onStartProject = vi.fn().mockResolvedValue({
+      ok: true,
+      action: "resumed",
+      message: "Resumed existing project `habit-cli`. Reused existing workspace directory `/home/paddy/habit-cli`, and that path is now the active working directory.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        repositoryUrl: "https://github.com/evolvo-auto/habit-cli",
+        workspacePath: "/home/paddy/habit-cli",
+        status: "active",
+      },
+    });
+    const onListRegisteredProjects = vi.fn().mockResolvedValue([
+      {
+        slug: "habit-cli",
+        displayName: "Habit CLI",
+        status: "active",
+      },
+    ]);
+    const interaction = createSlashInteraction({
+      id: "slash-start-existing-1",
+      commandName: "startproject",
+      subcommand: "existing",
+      values: {
+        project: "habit-cli",
+      },
+    });
+
+    const result = await handleDiscordSlashCommandInteraction(interaction, workDir, {
+      onStartProject,
+      onListRegisteredProjects,
+    });
+
+    expect(onStartProject).toHaveBeenCalledWith({
+      messageId: "slash-start-existing-1",
+      requestedAt: expect.any(String),
+      requestedBy: "discord:operator-1",
+      mode: "existing",
+      displayName: "Habit CLI",
+      slug: "habit-cli",
+      repositoryName: "habit-cli",
+      issueLabel: "project:habit-cli",
+      workspacePath: "/home/paddy/habit-cli",
+    });
+    expect(result).toEqual({
+      gracefulShutdownRequest: null,
+      replyContent: [
+        "<@operator-1> Resumed existing project `Habit CLI`.",
+        "Resumed existing project `habit-cli`. Reused existing workspace directory `/home/paddy/habit-cli`, and that path is now the active working directory.",
+        "Registry status: `active`",
+        "Execution repository: https://github.com/evolvo-auto/habit-cli",
+        "Workspace: `/home/paddy/habit-cli`",
+      ].join("\n"),
+    });
+  });
+
   it("handles an authorized /stopproject slash command", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
@@ -1867,15 +1975,26 @@ describe("operatorControl", () => {
         slug: "habit-cli",
       },
     });
+    const onListRegisteredProjects = vi.fn().mockResolvedValue([
+      {
+        slug: "habit-cli",
+        displayName: "Habit CLI",
+        status: "active",
+      },
+    ]);
     const interaction = createSlashInteraction({
       id: "slash-stop-1",
       commandName: "stopproject",
       values: {
-        name: "Habit CLI",
+        project: "habit-cli",
+        mode: "now",
       },
     });
 
-    const result = await handleDiscordSlashCommandInteraction(interaction, workDir, { onStopProject });
+    const result = await handleDiscordSlashCommandInteraction(interaction, workDir, {
+      onStopProject,
+      onListRegisteredProjects,
+    });
 
     expect(onStopProject).toHaveBeenCalledWith({
       messageId: "slash-stop-1",
@@ -1918,16 +2037,26 @@ describe("operatorControl", () => {
         slug: "habit-cli",
       },
     });
+    const onListRegisteredProjects = vi.fn().mockResolvedValue([
+      {
+        slug: "habit-cli",
+        displayName: "Habit CLI",
+        status: "active",
+      },
+    ]);
     const interaction = createSlashInteraction({
       id: "slash-stop-when-complete-1",
       commandName: "stopproject",
       values: {
-        name: "Habit CLI",
-        mode: "when-project-complete",
+        project: "habit-cli",
+        mode: "whenComplete",
       },
     });
 
-    const result = await handleDiscordSlashCommandInteraction(interaction, workDir, { onStopProject });
+    const result = await handleDiscordSlashCommandInteraction(interaction, workDir, {
+      onStopProject,
+      onListRegisteredProjects,
+    });
 
     expect(onStopProject).toHaveBeenCalledWith({
       messageId: "slash-stop-when-complete-1",
@@ -1977,6 +2106,26 @@ describe("operatorControl", () => {
           limit: 10,
           remaining: 10,
         },
+        queueTotals: {
+          Inbox: 0,
+          Planning: 0,
+          "Ready for Dev": 0,
+          "In Dev": 0,
+          "Ready for Review": 0,
+          "In Review": 0,
+          "Ready for Release": 0,
+          Releasing: 0,
+          Blocked: 0,
+          Done: 0,
+        },
+        workers: [],
+        limits: {
+          ideaStageTargetPerProject: 5,
+          issueGeneratorMaxIssuesPerProject: 5,
+          planningLimitPerProject: 5,
+          readyForDevLimitPerProject: 3,
+          inDevLimitPerProject: 1,
+        },
       },
     });
     const interaction = createSlashInteraction({
@@ -2003,6 +2152,9 @@ describe("operatorControl", () => {
         "Lifecycle: none",
         "Deferred stop: none",
         "Cycle: not started yet (10 total budget available)",
+        "Queues: Inbox 0 | Planning 0 | Ready for Dev 0 | In Dev 0 | Ready for Review 0 | In Review 0 | Ready for Release 0 | Releasing 0 | Blocked 0 | Done 0",
+        "Workers: none registered",
+        "Limits: ideaTarget=5 issueGenBatch=5 planning=5 readyForDev=3 inDev=1",
       ].join("\n"),
     });
     expect(result).toEqual({
@@ -2018,6 +2170,9 @@ describe("operatorControl", () => {
         "Lifecycle: none",
         "Deferred stop: none",
         "Cycle: not started yet (10 total budget available)",
+        "Queues: Inbox 0 | Planning 0 | Ready for Dev 0 | In Dev 0 | Ready for Review 0 | In Review 0 | Ready for Release 0 | Releasing 0 | Blocked 0 | Done 0",
+        "Workers: none registered",
+        "Limits: ideaTarget=5 issueGenBatch=5 planning=5 readyForDev=3 inDev=1",
       ].join("\n"),
     });
   });

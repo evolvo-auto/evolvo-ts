@@ -22,6 +22,35 @@ export type RuntimeStatusCycle = {
   remaining: number | null;
 };
 
+export type RuntimeStatusQueueTotals = {
+  Inbox: number;
+  Planning: number;
+  "Ready for Dev": number;
+  "In Dev": number;
+  "Ready for Review": number;
+  "In Review": number;
+  "Ready for Release": number;
+  Releasing: number;
+  Blocked: number;
+  Done: number;
+};
+
+export type RuntimeStatusWorker = {
+  workerId: string;
+  role: string;
+  projectSlug: string | null;
+  claim: string | null;
+  restartCount: number;
+};
+
+export type RuntimeStatusLimits = {
+  ideaStageTargetPerProject: number;
+  issueGeneratorMaxIssuesPerProject: number;
+  planningLimitPerProject: number;
+  readyForDevLimitPerProject: number;
+  inDevLimitPerProject: number;
+};
+
 export type RuntimeStatusSnapshot = {
   online: true;
   runtimeState: RuntimeStatusState;
@@ -32,6 +61,9 @@ export type RuntimeStatusSnapshot = {
   activeIssue: RuntimeStatusIssue | null;
   deferredStop: ActiveProjectState["deferredStopMode"] | null;
   cycle: RuntimeStatusCycle | null;
+  queueTotals: RuntimeStatusQueueTotals | null;
+  workers: RuntimeStatusWorker[];
+  limits: RuntimeStatusLimits | null;
 };
 
 function normalizePositiveInteger(value: number | null | undefined): number | null {
@@ -93,6 +125,9 @@ export function buildRuntimeStatusSnapshot(input: {
   activeIssue: RuntimeStatusIssue | null;
   currentCycle: number | null;
   cycleLimit: number | null;
+  queueTotals?: RuntimeStatusQueueTotals | null;
+  workers?: RuntimeStatusWorker[];
+  limits?: RuntimeStatusLimits | null;
 }): RuntimeStatusSnapshot {
   return {
     online: true,
@@ -104,5 +139,8 @@ export function buildRuntimeStatusSnapshot(input: {
     activeIssue: input.activeIssue,
     deferredStop: input.activeProjectState.deferredStopMode ?? null,
     cycle: buildCycleStatus(input.currentCycle, input.cycleLimit),
+    queueTotals: input.queueTotals ?? null,
+    workers: input.workers ?? [],
+    limits: input.limits ?? null,
   };
 }

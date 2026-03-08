@@ -42,6 +42,9 @@ describe("runtimeStatus", () => {
         limit: 10,
         remaining: 7,
       },
+      queueTotals: null,
+      workers: [],
+      limits: null,
     });
   });
 
@@ -88,6 +91,9 @@ describe("runtimeStatus", () => {
       limit: 12,
       remaining: 7,
     });
+    expect(snapshot.queueTotals).toBeNull();
+    expect(snapshot.workers).toEqual([]);
+    expect(snapshot.limits).toBeNull();
   });
 
   it("reports idle mode when a project is explicitly stopped", () => {
@@ -122,5 +128,8 @@ describe("runtimeStatus", () => {
       limit: 10,
       remaining: 10,
     });
+    expect(snapshot.queueTotals).toBeNull();
+    expect(snapshot.workers).toEqual([]);
+    expect(snapshot.limits).toBeNull();
   });
 });

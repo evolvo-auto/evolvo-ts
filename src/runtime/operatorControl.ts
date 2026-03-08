@@ -4,6 +4,7 @@ import {
   Events,
   GatewayIntentBits,
   MessageFlags,
+  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from "discord.js";
@@ -40,6 +41,7 @@ export type StartProjectCommandRequest = {
   messageId: string;
   requestedAt: string;
   requestedBy: string;
+  mode: "legacy" | "existing" | "new";
   displayName: string;
   slug: string;
   repositoryName: string;
@@ -60,6 +62,12 @@ export type StatusCommandRequest = {
   messageId: string;
   requestedAt: string;
   requestedBy: string;
+};
+
+export type RegisteredProjectOption = {
+  slug: string;
+  displayName: string;
+  status: "active" | "provisioning" | "failed";
 };
 
 export type StartProjectCommandResult =
@@ -137,6 +145,7 @@ export type DiscordControlHandlers = {
   onStartProject?: (request: StartProjectCommandRequest) => Promise<StartProjectCommandResult>;
   onStopProject?: (request: StopProjectCommandRequest) => Promise<StopProjectCommandResult>;
   onStatus?: (request: StatusCommandRequest) => Promise<StatusCommandResult>;
+  onListRegisteredProjects?: () => Promise<RegisteredProjectOption[]>;
 };
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -359,8 +368,11 @@ function parseStopProjectRequestSuffix(
   }
 
   const whenCompletePattern = /\s+whenprojectcomplete$/i;
-  const mode: "now" | "when-project-complete" = whenCompletePattern.test(trimmed) ? "when-project-complete" : "now";
-  const projectName = trimmed.replace(whenCompletePattern, "").trim();
+  const whenCompleteAliasPattern = /\s+whencomplete$/i;
+  const mode: "now" | "when-project-complete" = whenCompletePattern.test(trimmed) || whenCompleteAliasPattern.test(trimmed)
+    ? "when-project-complete"
+    : "now";
+  const projectName = trimmed.replace(whenCompletePattern, "").replace(whenCompleteAliasPattern, "").trim();
   if (!projectName) {
     return {
       ok: false,
@@ -373,6 +385,71 @@ function parseStopProjectRequestSuffix(
     projectName,
     mode,
   };
+}
+
+function normalizeRegisteredProjectOption(raw: unknown): RegisteredProjectOption | null {
+  if (typeof raw !== "object" || raw === null) {
+    return null;
+  }
+
+  const candidate = raw as Partial<RegisteredProjectOption>;
+  const slug = typeof candidate.slug === "string" ? candidate.slug.trim() : "";
+  const displayName = typeof candidate.displayName === "string" ? candidate.displayName.trim() : "";
+  const status = candidate.status === "active" || candidate.status === "provisioning" || candidate.status === "failed"
+    ? candidate.status
+    : null;
+  if (!slug || !displayName || status === null) {
+    return null;
+  }
+
+  return {
+    slug,
+    displayName,
+    status,
+  };
+}
+
+async function listRegisteredProjects(
+  handlers: DiscordControlHandlers,
+): Promise<RegisteredProjectOption[]> {
+  if (!handlers.onListRegisteredProjects) {
+    return [];
+  }
+
+  let projects: RegisteredProjectOption[];
+  try {
+    projects = await handlers.onListRegisteredProjects();
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(projects)) {
+    return [];
+  }
+
+  const deduped = new Map<string, RegisteredProjectOption>();
+  for (const rawProject of projects) {
+    const project = normalizeRegisteredProjectOption(rawProject);
+    if (project === null) {
+      continue;
+    }
+
+    deduped.set(project.slug, project);
+  }
+
+  return [...deduped.values()].sort((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+function findRegisteredProjectBySlug(
+  projects: RegisteredProjectOption[],
+  slug: string,
+): RegisteredProjectOption | null {
+  const normalized = slug.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  return projects.find((project) => project.slug === normalized) ?? null;
 }
 
 function buildAuthHeaders(config: DiscordControlConfig): Record<string, string> {
@@ -617,7 +694,7 @@ function buildStartupBootMessageContent(): string {
   return [
     "🤖 Evolvo runtime booted.",
     "Operator control is online in plain-text mode, and the live bot session will register slash commands when it connects.",
-    "Slash commands: `/status`, `/quit`, `/startproject`, `/stopproject name:<project> mode:now|when-project-complete`.",
+    "Slash commands: `/status`, `/quit`, `/startproject existing project:<registered-project>`, `/startproject new name:<project-name>`, `/stopproject project:<registered-project> mode:now|whenComplete`.",
     "Plain-text fallback: `status`, `quit after current task`, `quit after tasks`, `startProject <project-name>`, `stopProject <project-name>`, `stopProject <project-name> whenProjectComplete`.",
     "When Evolvo posts a cycle-limit prompt, reply with `continue` or `quit`.",
     `Started at: ${startedAt}`,
@@ -749,7 +826,7 @@ function buildStartProjectAcknowledgementContent(
     ? [
       `<@${operatorUserId}> Could not queue project start request for \`${request.displayName}\`.`,
       result.message,
-      "Usage: `startProject <project-name>`",
+      "Usage: `/startproject existing project:<registered-project>` or `/startproject new name:<project-name>`",
     ].join("\n")
     : result.action === "created"
       ? [
@@ -793,7 +870,7 @@ function buildStopProjectAcknowledgementContent(
     return [
       `<@${operatorUserId}> Could not stop the requested project.`,
       result.message,
-      "Usage: `stopProject <project-name>` or `stopProject <project-name> whenProjectComplete`",
+      "Usage: `/stopproject project:<registered-project> mode:now|whenComplete`",
     ].join("\n");
   }
 
@@ -916,6 +993,33 @@ function formatStatusCycleLine(snapshot: RuntimeStatusSnapshot): string {
   return `Cycle: ${snapshot.cycle.current ?? "unknown"} (limit unavailable)`;
 }
 
+function formatStatusQueuesLine(snapshot: RuntimeStatusSnapshot): string {
+  if (snapshot.queueTotals == null) {
+    return "Queues: unavailable";
+  }
+
+  return `Queues: Inbox ${snapshot.queueTotals.Inbox} | Planning ${snapshot.queueTotals.Planning} | Ready for Dev ${snapshot.queueTotals["Ready for Dev"]} | In Dev ${snapshot.queueTotals["In Dev"]} | Ready for Review ${snapshot.queueTotals["Ready for Review"]} | In Review ${snapshot.queueTotals["In Review"]} | Ready for Release ${snapshot.queueTotals["Ready for Release"]} | Releasing ${snapshot.queueTotals.Releasing} | Blocked ${snapshot.queueTotals.Blocked} | Done ${snapshot.queueTotals.Done}`;
+}
+
+function formatStatusWorkersLine(snapshot: RuntimeStatusSnapshot): string {
+  const workers = snapshot.workers ?? [];
+  if (workers.length === 0) {
+    return "Workers: none registered";
+  }
+
+  return `Workers: ${workers
+    .map((worker) => `${worker.role}${worker.projectSlug ? `/${worker.projectSlug}` : ""} ${worker.workerId}${worker.claim ? ` (${worker.claim})` : " (idle)"}${worker.restartCount > 0 ? ` r${worker.restartCount}` : ""}`)
+    .join(", ")}`;
+}
+
+function formatStatusLimitsLine(snapshot: RuntimeStatusSnapshot): string {
+  if (snapshot.limits == null) {
+    return "Limits: unavailable";
+  }
+
+  return `Limits: ideaTarget=${snapshot.limits.ideaStageTargetPerProject} issueGenBatch=${snapshot.limits.issueGeneratorMaxIssuesPerProject} planning=${snapshot.limits.planningLimitPerProject} readyForDev=${snapshot.limits.readyForDevLimitPerProject} inDev=${snapshot.limits.inDevLimitPerProject}`;
+}
+
 function buildStatusAcknowledgementContent(
   operatorUserId: string,
   result: StatusCommandResult,
@@ -939,6 +1043,9 @@ function buildStatusAcknowledgementContent(
     formatStatusLifecycleLine(snapshot),
     formatStatusDeferredStopLine(snapshot),
     formatStatusCycleLine(snapshot),
+    formatStatusQueuesLine(snapshot),
+    formatStatusWorkersLine(snapshot),
+    formatStatusLimitsLine(snapshot),
   ].join("\n");
 }
 
@@ -1047,39 +1154,61 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIChatInputApplicationC
     },
     {
       name: DISCORD_SLASH_COMMAND_NAMES.startProject,
-      description: "Create or resume a project by name",
+      description: "Start an existing project or create a new project",
       options: [
         {
-          type: ApplicationCommandOptionType.String,
-          name: "name",
-          description: "Project name",
-          required: true,
+          type: ApplicationCommandOptionType.Subcommand,
+          name: "existing",
+          description: "Start or resume a registered project",
+          options: [
+            {
+              type: ApplicationCommandOptionType.String,
+              name: "project",
+              description: "Registered project",
+              required: true,
+              autocomplete: true,
+            },
+          ],
+        },
+        {
+          type: ApplicationCommandOptionType.Subcommand,
+          name: "new",
+          description: "Create and register a brand-new project",
+          options: [
+            {
+              type: ApplicationCommandOptionType.String,
+              name: "name",
+              description: "New project name",
+              required: true,
+            },
+          ],
         },
       ],
     },
     {
       name: DISCORD_SLASH_COMMAND_NAMES.stopProject,
-      description: "Stop a project by name",
+      description: "Stop a registered project",
       options: [
         {
           type: ApplicationCommandOptionType.String,
-          name: "name",
-          description: "Project name",
+          name: "project",
+          description: "Registered project",
           required: true,
+          autocomplete: true,
         },
         {
           type: ApplicationCommandOptionType.String,
           name: "mode",
-          description: "Whether to stop immediately or when the project is complete",
-          required: false,
+          description: "How to stop the selected project",
+          required: true,
           choices: [
             {
               name: "Now",
               value: "now",
             },
             {
-              name: "When project complete",
-              value: "when-project-complete",
+              name: "When Complete",
+              value: "whenComplete",
             },
           ],
         },
@@ -1130,8 +1259,12 @@ async function processStartProjectControlCommand(
   workDir: string,
   messageId: string,
   requestedProjectName: string,
+  mode: StartProjectCommandRequest["mode"],
   requestedBy: string,
   handlers: DiscordControlHandlers,
+  options: {
+    registeredProjectSlug?: string;
+  } = {},
 ): Promise<{ request: StartProjectCommandRequest; result: StartProjectCommandResult; duplicate: boolean }> {
   const recordedReceipt = await recordDiscordControlCommandReceipt(workDir, {
     command: "start-project",
@@ -1145,6 +1278,7 @@ async function processStartProjectControlCommand(
         messageId,
         requestedAt: new Date().toISOString(),
         requestedBy,
+        mode,
         displayName: requestedProjectName.trim() || "<missing project name>",
         slug: "",
         repositoryName: "",
@@ -1163,12 +1297,14 @@ async function processStartProjectControlCommand(
 
   try {
     const normalized = normalizeProjectNameInput(requestedProjectName);
+    const selectedSlug = options.registeredProjectSlug?.trim() || null;
     startProjectRequest = {
       messageId,
       requestedAt: new Date().toISOString(),
       requestedBy,
+      mode,
       displayName: normalized.displayName,
-      slug: normalized.slug,
+      slug: selectedSlug ?? normalized.slug,
       repositoryName: normalized.repositoryName,
       issueLabel: normalized.issueLabel,
       workspacePath: normalized.workspacePath,
@@ -1185,6 +1321,7 @@ async function processStartProjectControlCommand(
       messageId,
       requestedAt: new Date().toISOString(),
       requestedBy,
+      mode,
       displayName: fallbackDisplayName,
       slug: "",
       repositoryName: "",
@@ -1292,6 +1429,73 @@ function getSlashCommandName(interaction: ChatInputCommandInteraction): DiscordS
   return null;
 }
 
+type DiscordAutocompleteChoice = {
+  name: string;
+  value: string;
+};
+
+function buildProjectAutocompleteChoices(
+  projects: RegisteredProjectOption[],
+  query: string,
+): DiscordAutocompleteChoice[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = normalizedQuery.length === 0
+    ? projects
+    : projects.filter((project) =>
+      project.displayName.toLowerCase().includes(normalizedQuery) || project.slug.toLowerCase().includes(normalizedQuery)
+    );
+
+  return filtered.slice(0, 25).map((project) => ({
+    name: `${project.displayName} (${project.slug})`,
+    value: project.slug,
+  }));
+}
+
+function getStartProjectSubcommand(interaction: ChatInputCommandInteraction): "existing" | "new" | null {
+  const rawSubcommand = interaction.options.getSubcommand(true);
+  if (rawSubcommand === "existing" || rawSubcommand === "new") {
+    return rawSubcommand;
+  }
+
+  return null;
+}
+
+export async function handleDiscordSlashCommandAutocompleteInteraction(
+  interaction: AutocompleteInteraction,
+  handlers: DiscordControlHandlers = {},
+  config: DiscordControlConfig = getDiscordControlConfigFromEnv() ?? (() => {
+    throw new Error("Discord operator control is not configured.");
+  })(),
+): Promise<boolean> {
+  const commandName = interaction.commandName;
+  const isSupportedCommand = commandName === DISCORD_SLASH_COMMAND_NAMES.startProject
+    || commandName === DISCORD_SLASH_COMMAND_NAMES.stopProject;
+  if (!isSupportedCommand) {
+    return false;
+  }
+
+  if (interaction.guildId !== config.guildId || interaction.channelId !== config.controlChannelId) {
+    await interaction.respond([]);
+    return true;
+  }
+
+  if (interaction.user.id !== config.operatorUserId) {
+    await interaction.respond([]);
+    return true;
+  }
+
+  const focusedOption = interaction.options.getFocused(true);
+  if (focusedOption.name !== "project") {
+    await interaction.respond([]);
+    return true;
+  }
+
+  const projects = await listRegisteredProjects(handlers);
+  const choices = buildProjectAutocompleteChoices(projects, String(focusedOption.value ?? ""));
+  await interaction.respond(choices);
+  return true;
+}
+
 export async function handleDiscordSlashCommandInteraction(
   interaction: ChatInputCommandInteraction,
   workDir: string,
@@ -1353,17 +1557,68 @@ export async function handleDiscordSlashCommandInteraction(
   }
 
   if (commandName === DISCORD_SLASH_COMMAND_NAMES.startProject) {
-    const requestedProjectName = interaction.options.getString("name", true);
-    const processed = await processStartProjectControlCommand(
-      workDir,
-      interaction.id,
-      requestedProjectName,
-      `discord:${interaction.user.id}`,
-      handlers,
-    );
-    const replyContent = processed.duplicate
-      ? buildDuplicateInteractionMessage()
-      : buildStartProjectAcknowledgementContent(config.operatorUserId, processed.request, processed.result);
+    const startSubcommand = getStartProjectSubcommand(interaction);
+    if (startSubcommand === null) {
+      const replyContent = [
+        `<@${config.operatorUserId}> Could not queue project start request.`,
+        "Invalid startProject command path.",
+        "Usage: `/startproject existing project:<registered-project>` or `/startproject new name:<project-name>`",
+      ].join("\n");
+      await interaction.editReply({ content: replyContent });
+      return {
+        gracefulShutdownRequest: null,
+        replyContent,
+      };
+    }
+
+    const requestedBy = `discord:${interaction.user.id}`;
+    let processed:
+      | { request: StartProjectCommandRequest; result: StartProjectCommandResult; duplicate: boolean }
+      | null = null;
+    let validationMessage: string | null = null;
+
+    if (startSubcommand === "existing") {
+      const selectedSlug = interaction.options.getString("project", true).trim();
+      const projects = await listRegisteredProjects(handlers);
+      if (projects.length === 0) {
+        validationMessage = "No registered projects are available to start. Use `/startproject new` to create one.";
+      } else {
+        const selectedProject = findRegisteredProjectBySlug(projects, selectedSlug);
+        if (selectedProject === null) {
+          validationMessage = `Project \`${selectedSlug}\` is not in the registered project set. Select from autocomplete suggestions.`;
+        } else {
+          processed = await processStartProjectControlCommand(
+            workDir,
+            interaction.id,
+            selectedProject.displayName,
+            "existing",
+            requestedBy,
+            handlers,
+            { registeredProjectSlug: selectedProject.slug },
+          );
+        }
+      }
+    } else {
+      const requestedProjectName = interaction.options.getString("name", true);
+      processed = await processStartProjectControlCommand(
+        workDir,
+        interaction.id,
+        requestedProjectName,
+        "new",
+        requestedBy,
+        handlers,
+      );
+    }
+
+    const replyContent = processed
+      ? processed.duplicate
+        ? buildDuplicateInteractionMessage()
+        : buildStartProjectAcknowledgementContent(config.operatorUserId, processed.request, processed.result)
+      : [
+        `<@${config.operatorUserId}> Could not queue project start request.`,
+        validationMessage ?? "Unknown project start request error.",
+        "Usage: `/startproject existing project:<registered-project>` or `/startproject new name:<project-name>`",
+      ].join("\n");
     await interaction.editReply({ content: replyContent });
     return {
       gracefulShutdownRequest: null,
@@ -1371,14 +1626,40 @@ export async function handleDiscordSlashCommandInteraction(
     };
   }
 
-  const stopProjectName = interaction.options.getString("name", true);
-  const stopProjectMode = interaction.options.getString("mode") as "now" | "when-project-complete" | null;
+  const stopProjectSlug = interaction.options.getString("project", true).trim();
+  const stopProjectMode = interaction.options.getString("mode", true);
+  if (stopProjectMode !== "now" && stopProjectMode !== "whenComplete") {
+    const replyContent = [
+      `<@${config.operatorUserId}> Could not stop the requested project.`,
+      `Invalid stop mode \`${stopProjectMode}\`. Supported values are \`now\` and \`whenComplete\`.`,
+      "Usage: `/stopproject project:<registered-project> mode:now|whenComplete`",
+    ].join("\n");
+    await interaction.editReply({ content: replyContent });
+    return {
+      replyContent,
+    };
+  }
+  const projects = await listRegisteredProjects(handlers);
+  const selectedStopProject = findRegisteredProjectBySlug(projects, stopProjectSlug);
+  if (selectedStopProject === null) {
+    const replyContent = [
+      `<@${config.operatorUserId}> Could not stop the requested project.`,
+      `Project \`${stopProjectSlug}\` is not in the registered project set. Select from autocomplete suggestions.`,
+      "Usage: `/stopproject project:<registered-project> mode:now|whenComplete`",
+    ].join("\n");
+    await interaction.editReply({ content: replyContent });
+    return {
+      replyContent,
+    };
+  }
+
+  const internalStopMode = stopProjectMode === "whenComplete" ? "when-project-complete" : "now";
   const processed = await processStopProjectControlCommand(
     workDir,
     interaction.id,
     `discord:${interaction.user.id}`,
-    stopProjectName,
-    stopProjectMode ?? "now",
+    selectedStopProject.displayName,
+    internalStopMode,
     handlers,
   );
   const replyContent = processed.duplicate
@@ -1667,6 +1948,7 @@ export async function pollDiscordGracefulShutdownCommand(
           workDir,
           message.id,
           requestedProjectName,
+          "legacy",
           `discord:${config.operatorUserId}`,
           handlers,
         );
@@ -1711,6 +1993,15 @@ async function startDiscordSlashCommandListener(
   });
 
   client.on(Events.InteractionCreate, (interaction) => {
+    if (interaction.isAutocomplete()) {
+      void handleDiscordSlashCommandAutocompleteInteraction(interaction, handlers, config).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "unknown error";
+        console.error(`Discord slash command autocomplete failed: ${message}`);
+        void interaction.respond([]).catch(() => undefined);
+      });
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) {
       return;
     }

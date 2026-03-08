@@ -122,11 +122,11 @@ export async function waitForRuntimeReadinessSignal(options: {
   const timeoutMs = Math.max(1, Math.floor(options.timeoutMs));
   const pollIntervalMs = Math.max(1, Math.floor(options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS));
   const signalPath = options.signalPath ?? getRuntimeReadinessSignalPath(options.workDir);
-  const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
   let lastObservedToken: string | null = null;
   let sawMalformedPayload = false;
 
-  while (Date.now() <= deadline) {
+  while (true) {
     try {
       const signal = await readRuntimeReadinessSignal(signalPath);
       if (signal) {
@@ -147,6 +147,10 @@ export async function waitForRuntimeReadinessSignal(options: {
           error instanceof Error ? error.message : "unknown error"
         }`,
       );
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) {
+      break;
     }
 
     await wait(pollIntervalMs);
