@@ -43,8 +43,8 @@ function selectHighestPriorityIssue(issues: IssueSummary[]): IssueSummary | null
   return inProgress ?? issues[0] ?? null;
 }
 
-function issueTargetsActiveProject(issue: IssueSummary, activeProjectSlug: string): boolean {
-  const normalizedSlug = activeProjectSlug.trim().toLowerCase();
+function issueTargetsProject(issue: IssueSummary, projectSlug: string): boolean {
+  const normalizedSlug = projectSlug.trim().toLowerCase();
   if (!normalizedSlug) {
     return false;
   }
@@ -59,23 +59,31 @@ function issueTargetsActiveProject(issue: IssueSummary, activeProjectSlug: strin
 
 export function selectIssueForWork(
   issues: IssueSummary[],
-  options: { activeProjectSlug?: string | null } = {},
+  options: { activeProjectSlug?: string | null; stoppedProjectSlug?: string | null } = {},
 ): IssueSummary | null {
   const notCompleted = issues.filter((issue) => !hasIssueLabel(issue, "completed") && !hasIssueLabel(issue, "blocked"));
   if (notCompleted.length === 0) {
     return null;
   }
 
+  const stoppedProjectSlug = options.stoppedProjectSlug?.trim() || null;
+  const selectableIssues = stoppedProjectSlug
+    ? notCompleted.filter((issue) => !issueTargetsProject(issue, stoppedProjectSlug))
+    : notCompleted;
+  if (selectableIssues.length === 0) {
+    return null;
+  }
+
   const activeProjectSlug = options.activeProjectSlug?.trim() || null;
   if (activeProjectSlug) {
-    const activeProjectIssues = notCompleted.filter((issue) => issueTargetsActiveProject(issue, activeProjectSlug));
+    const activeProjectIssues = selectableIssues.filter((issue) => issueTargetsProject(issue, activeProjectSlug));
     const prioritized = selectHighestPriorityIssue(activeProjectIssues);
     if (prioritized) {
       return prioritized;
     }
   }
 
-  return selectHighestPriorityIssue(notCompleted);
+  return selectHighestPriorityIssue(selectableIssues);
 }
 
 export function isOutdatedIssue(issue: IssueSummary): boolean {

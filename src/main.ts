@@ -38,6 +38,7 @@ import {
 } from "./runtime/gracefulShutdown.js";
 import {
   notifyCycleLimitDecisionAppliedInDiscord,
+  type StopProjectCommandResult,
   notifyIssueStartedInDiscord,
   notifyRuntimeQuittingInDiscord,
   pollDiscordGracefulShutdownCommand,
@@ -73,7 +74,7 @@ import {
   handleStartProjectCommand,
   isProjectProvisioningRequestIssue,
 } from "./projects/projectProvisioning.js";
-import { readActiveProjectState } from "./projects/activeProjectState.js";
+import { readActiveProjectState, stopActiveProjectState } from "./projects/activeProjectState.js";
 import {
   PROJECT_ROUTING_BLOCKED_LABEL,
   buildProjectRoutingBlockedComment,
@@ -82,12 +83,15 @@ import {
 import {
   buildDefaultProjectContext,
   ensureProjectRegistry,
+  findProjectBySlug,
+  readProjectRegistry,
 } from "./projects/projectRegistry.js";
 
 const MAX_ISSUE_CYCLES = 5;
 const MIN_REPLENISH_ISSUES = 3;
 const MAX_OPEN_ISSUES = 5;
 const RUN_LOOP_GITHUB_MAX_RETRIES = 2;
+const STOPPED_PROJECT_IDLE_WAIT_MS = 1_000;
 export const DEFAULT_PROMPT = LOOP_DEFAULT_PROMPT;
 
 function getLifecycleEntityKind(issue: IssueSummary): "issue" | "challenge" {
@@ -218,6 +222,22 @@ function isEnforcedGracefulShutdownRequest(request: GracefulShutdownRequest | nu
   return request?.enforcedAt !== null;
 }
 
+function buildStopProjectResultLog(result: StopProjectCommandResult): string {
+  if (!result.ok) {
+    return `[stopProject] failed: ${result.message}`;
+  }
+
+  if (result.action === "stopped") {
+    return `[stopProject] halted project ${result.project?.displayName ?? result.project?.slug ?? "unknown"}. Runtime remains online.`;
+  }
+
+  if (result.action === "already-stopped") {
+    return `[stopProject] project ${result.project?.displayName ?? result.project?.slug ?? "unknown"} was already halted. Runtime remains online.`;
+  }
+
+  return "[stopProject] no active project was selected. Runtime remains online.";
+}
+
 async function readPendingGracefulShutdownRequest(
   workDir: string,
   discordHandlers: DiscordControlHandlers,
@@ -284,7 +304,8 @@ export async function main(): Promise<void> {
     repo: GITHUB_REPO,
     workDir: WORK_DIR,
   });
-  let activeProjectSlug = (await readActiveProjectState(WORK_DIR)).activeProjectSlug;
+  let activeProjectState = await readActiveProjectState(WORK_DIR);
+  let stoppedProjectIdleLoggedSlug: string | null = null;
   const discordHandlers: DiscordControlHandlers = {
     onStartProject: async (request) => {
       const result = await handleStartProjectCommand({
@@ -297,7 +318,15 @@ export async function main(): Promise<void> {
         requestedAt: request.requestedAt,
       });
       if (result.ok) {
-        activeProjectSlug = result.project.slug;
+        activeProjectState = {
+          version: activeProjectState.version,
+          activeProjectSlug: result.project.slug,
+          selectionState: "active",
+          updatedAt: request.requestedAt,
+          requestedBy: request.requestedBy,
+          source: "start-project-command",
+        };
+        stoppedProjectIdleLoggedSlug = null;
         console.log(
           result.action === "created"
             ? `[startProject] created new project flow for ${result.project.displayName} (${result.project.slug}).`
@@ -306,6 +335,59 @@ export async function main(): Promise<void> {
       } else {
         console.error(`[startProject] failed for ${request.displayName}: ${result.message}`);
       }
+      return result;
+    },
+    onStopProject: async (request) => {
+      console.log(`[stopProject] received stop request from ${request.requestedBy}.`);
+      const stopResult = await stopActiveProjectState({
+        workDir: WORK_DIR,
+        requestedBy: request.requestedBy,
+        updatedAt: request.requestedAt,
+      });
+      activeProjectState = stopResult.state;
+      let projectRecord = null;
+      if (stopResult.state.activeProjectSlug !== null) {
+        try {
+          const registry = await readProjectRegistry(WORK_DIR, defaultProjectContext);
+          projectRecord = findProjectBySlug(registry, stopResult.state.activeProjectSlug);
+        } catch {
+          projectRecord = null;
+        }
+      }
+      const result: StopProjectCommandResult = stopResult.status === "stopped"
+        ? {
+          ok: true,
+          action: "stopped",
+          message: `Project \`${projectRecord?.slug ?? stopResult.state.activeProjectSlug ?? "unknown"}\` will not be selected again until \`/startProject <project-name>\` is used.`,
+          ...(projectRecord
+            ? {
+              project: {
+                displayName: projectRecord.displayName,
+                slug: projectRecord.slug,
+              },
+            }
+            : {}),
+        }
+        : stopResult.status === "already-stopped"
+          ? {
+            ok: true,
+            action: "already-stopped",
+            message: `Project \`${projectRecord?.slug ?? stopResult.state.activeProjectSlug ?? "unknown"}\` is already halted. Use \`/startProject <project-name>\` to resume it later.`,
+            ...(projectRecord
+              ? {
+                project: {
+                  displayName: projectRecord.displayName,
+                  slug: projectRecord.slug,
+                },
+              }
+              : {}),
+          }
+          : {
+            ok: true,
+            action: "no-active-project",
+            message: "There is no active project to stop. Evolvo remains online and ready for further operator commands.",
+          };
+      console.log(buildStopProjectResultLog(result));
       return result;
     },
   };
@@ -403,10 +485,36 @@ export async function main(): Promise<void> {
           }
 
           const selectedIssue = selectIssueForWork(retryEligibleIssues, {
-            activeProjectSlug,
+            activeProjectSlug: activeProjectState.selectionState === "active" ? activeProjectState.activeProjectSlug : null,
+            stoppedProjectSlug: activeProjectState.selectionState === "stopped" ? activeProjectState.activeProjectSlug : null,
           });
+          if (selectedIssue !== null || activeProjectState.selectionState !== "stopped") {
+            stoppedProjectIdleLoggedSlug = null;
+          }
 
           if (!selectedIssue) {
+            if (activeProjectState.selectionState === "stopped" && activeProjectState.activeProjectSlug !== null) {
+              if (
+                await stopIfGracefulShutdownPreventsNewWork(
+                  WORK_DIR,
+                  "Stopping before entering stopped-project idle mode.",
+                  discordHandlers,
+                )
+              ) {
+                return;
+              }
+
+              if (stoppedProjectIdleLoggedSlug !== activeProjectState.activeProjectSlug) {
+                console.log(
+                  `[stopProject] project ${activeProjectState.activeProjectSlug} is halted. Runtime remains online and is waiting for further operator instructions.`,
+                );
+                stoppedProjectIdleLoggedSlug = activeProjectState.activeProjectSlug;
+              }
+              await waitForRunLoopRetry(STOPPED_PROJECT_IDLE_WAIT_MS);
+              cycle -= 1;
+              continue issueCycleLoop;
+            }
+
             if (
               await stopIfGracefulShutdownPreventsNewWork(
                 WORK_DIR,
@@ -565,7 +673,15 @@ export async function main(): Promise<void> {
             );
 
             if (provisioningResult.ok) {
-              activeProjectSlug = provisioningResult.record.slug;
+              activeProjectState = {
+                version: activeProjectState.version,
+                activeProjectSlug: provisioningResult.record.slug,
+                selectionState: "active",
+                updatedAt: new Date().toISOString(),
+                requestedBy: provisioningResult.metadata.requestedBy,
+                source: "project-provisioning",
+              };
+              stoppedProjectIdleLoggedSlug = null;
               await transitionIssueLifecycleState(issueManager, {
                 issue: selectedIssue,
                 nextState: "accepted",

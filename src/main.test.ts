@@ -39,7 +39,9 @@ const markGracefulShutdownRequestEnforcedMock = vi.fn();
 const tryResolveRepositoryDefaultBranchMock = vi.fn();
 const configureCodingAgentExecutionContextMock = vi.fn();
 const ensureProjectRegistryMock = vi.fn();
+const readProjectRegistryMock = vi.fn();
 const readActiveProjectStateMock = vi.fn();
+const stopActiveProjectStateMock = vi.fn();
 const resolveProjectExecutionContextForIssueMock = vi.fn();
 const buildProjectRoutingBlockedCommentMock = vi.fn();
 const handleStartProjectCommandMock = vi.fn();
@@ -195,10 +197,14 @@ vi.mock("./projects/projectRegistry.js", () => ({
     defaultBranch: context.defaultBranch ?? null,
   }),
   ensureProjectRegistry: ensureProjectRegistryMock,
+  readProjectRegistry: readProjectRegistryMock,
+  findProjectBySlug: (registry: { projects: Array<{ slug: string }> }, slug: string) =>
+    registry.projects.find((project) => project.slug === slug) ?? null,
 }));
 
 vi.mock("./projects/activeProjectState.js", () => ({
   readActiveProjectState: readActiveProjectStateMock,
+  stopActiveProjectState: stopActiveProjectStateMock,
 }));
 
 vi.mock("./projects/projectExecutionContext.js", () => ({
@@ -353,13 +359,28 @@ describe("main", () => {
     buildProjectProvisioningCompletionSummaryMock.mockReturnValue("Provisioning complete summary");
     ensureProjectRegistryMock.mockReset();
     ensureProjectRegistryMock.mockResolvedValue({ version: 1, projects: [DEFAULT_PROJECT_EXECUTION_CONTEXT.project] });
+    readProjectRegistryMock.mockReset();
+    readProjectRegistryMock.mockResolvedValue({ version: 1, projects: [DEFAULT_PROJECT_EXECUTION_CONTEXT.project] });
     readActiveProjectStateMock.mockReset();
     readActiveProjectStateMock.mockResolvedValue({
-      version: 1,
+      version: 2,
       activeProjectSlug: null,
+      selectionState: null,
       updatedAt: null,
       requestedBy: null,
       source: null,
+    });
+    stopActiveProjectStateMock.mockReset();
+    stopActiveProjectStateMock.mockResolvedValue({
+      status: "stopped",
+      state: {
+        version: 2,
+        activeProjectSlug: "habit-cli",
+        selectionState: "stopped",
+        updatedAt: "2026-03-08T10:00:00.000Z",
+        requestedBy: "discord:operator-1",
+        source: "stop-project-command",
+      },
     });
     resolveProjectExecutionContextForIssueMock.mockReset();
     resolveProjectExecutionContextForIssueMock.mockResolvedValue({
@@ -503,6 +524,7 @@ describe("main", () => {
 
   afterEach(() => {
     process.argv = originalArgv;
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -595,6 +617,56 @@ describe("main", () => {
     expect(console.log).toHaveBeenCalledWith(
       "[startProject] created new project flow for Habit CLI (habit-cli).",
     );
+  });
+
+  it("routes /stopProject requests through the stop-project state handler", async () => {
+    readProjectRegistryMock.mockResolvedValueOnce({
+      version: 1,
+      projects: [
+        DEFAULT_PROJECT_EXECUTION_CONTEXT.project,
+        {
+          ...DEFAULT_PROJECT_EXECUTION_CONTEXT.project,
+          slug: "habit-cli",
+          displayName: "Habit CLI",
+          kind: "managed",
+          issueLabel: "project:habit-cli",
+          executionRepo: {
+            owner: "owner",
+            repo: "habit-cli",
+            url: "https://github.com/owner/habit-cli",
+            defaultBranch: "main",
+          },
+          cwd: "/tmp/evolvo/projects/habit-cli",
+        },
+      ],
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    const discordHandlers = startDiscordGracefulShutdownListenerMock.mock.calls[0]?.[1];
+    const result = await discordHandlers.onStopProject({
+      messageId: "7201",
+      requestedAt: "2026-03-08T10:00:00.000Z",
+      requestedBy: "discord:operator-1",
+    });
+
+    expect(stopActiveProjectStateMock).toHaveBeenCalledWith({
+      workDir: "/tmp/evolvo",
+      requestedBy: "discord:operator-1",
+      updatedAt: "2026-03-08T10:00:00.000Z",
+    });
+    expect(result).toEqual({
+      ok: true,
+      action: "stopped",
+      message: "Project `habit-cli` will not be selected again until `/startProject <project-name>` is used.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+      },
+    });
+    expect(console.log).toHaveBeenCalledWith("[stopProject] received stop request from discord:operator-1.");
+    expect(console.log).toHaveBeenCalledWith("[stopProject] halted project Habit CLI. Runtime remains online.");
   });
 
   it("logs and excludes unauthorized issues before normal selection", async () => {
@@ -848,8 +920,9 @@ describe("main", () => {
 
   it("prefers issues for the active project when one is selected", async () => {
     readActiveProjectStateMock.mockResolvedValueOnce({
-      version: 1,
+      version: 2,
       activeProjectSlug: "habit-cli",
+      selectionState: "active",
       updatedAt: "2026-03-08T09:10:00.000Z",
       requestedBy: "discord:operator-1",
       source: "start-project-command",
@@ -887,6 +960,49 @@ describe("main", () => {
 
     expect(markInProgressMock).toHaveBeenCalledWith(22);
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #22: Managed issue\n\nproject");
+  });
+
+  it("keeps the runtime online and idle when the active project is stopped", async () => {
+    vi.useFakeTimers();
+    readActiveProjectStateMock.mockResolvedValueOnce({
+      version: 2,
+      activeProjectSlug: "habit-cli",
+      selectionState: "stopped",
+      updatedAt: "2026-03-08T10:05:00.000Z",
+      requestedBy: "discord:operator-1",
+      source: "stop-project-command",
+    });
+    listOpenIssuesMock.mockResolvedValueOnce([
+      { number: 23, title: "Stopped project issue", description: "halted", state: "open", labels: ["project:habit-cli"] },
+    ]);
+    readGracefulShutdownRequestMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        version: 1,
+        source: "discord",
+        command: "/quit",
+        mode: "after-current-task",
+        messageId: "9901",
+        requestedAt: "2026-03-08T10:06:00.000Z",
+        enforcedAt: null,
+      });
+    const { main } = await import("./main.js");
+
+    const mainPromise = main();
+    await vi.advanceTimersByTimeAsync(1000);
+    await mainPromise;
+
+    expect(runCodingAgentMock).not.toHaveBeenCalled();
+    expect(runPlannerAgentMock).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(
+      "[stopProject] project habit-cli is halted. Runtime remains online and is waiting for further operator instructions.",
+    );
+    expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
+      "Graceful shutdown via /quit is being enforced. Stopping before starting a new task.",
+    );
   });
 
   it("blocks issues with invalid project labels before execution", async () => {

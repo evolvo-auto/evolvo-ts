@@ -142,4 +142,28 @@ describe("loopUtils retry handling", () => {
 
     expect(selected?.number).toBe(6);
   });
+
+  it("skips issues for a stopped project", () => {
+    const selected = selectIssueForWork(
+      [
+        {
+          number: 7,
+          title: "Stopped project issue",
+          description: "halted",
+          state: "open",
+          labels: ["project:habit-cli"],
+        },
+        {
+          number: 8,
+          title: "Fallback issue",
+          description: "other",
+          state: "open",
+          labels: [],
+        },
+      ],
+      { stoppedProjectSlug: "habit-cli" },
+    );
+
+    expect(selected?.number).toBe(8);
+  });
 });

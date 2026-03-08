@@ -302,8 +302,9 @@ describe("projectProvisioning", () => {
       },
     });
     expect(JSON.parse(await readFile(getActiveProjectStatePath(workDir), "utf8"))).toEqual({
-      version: 1,
+      version: 2,
       activeProjectSlug: "habit-cli",
+      selectionState: "active",
       updatedAt: "2026-03-08T08:00:00.000Z",
       requestedBy: "discord:operator-1",
       source: "start-project-command",
@@ -379,8 +380,9 @@ describe("projectProvisioning", () => {
     });
     expect(issueManager.createIssue).not.toHaveBeenCalled();
     expect(JSON.parse(await readFile(getActiveProjectStatePath(workDir), "utf8"))).toEqual({
-      version: 1,
+      version: 2,
       activeProjectSlug: "habit-cli",
+      selectionState: "active",
       updatedAt: "2026-03-08T08:05:00.000Z",
       requestedBy: "discord:operator-1",
       source: "start-project-command",
@@ -562,8 +564,9 @@ describe("projectProvisioning", () => {
       },
     });
     expect(JSON.parse(await readFile(getActiveProjectStatePath(workDir), "utf8"))).toEqual({
-      version: 1,
+      version: 2,
       activeProjectSlug: "habit-cli",
+      selectionState: "active",
       updatedAt: "2026-03-08T08:15:00.000Z",
       requestedBy: "discord:operator-1",
       source: "start-project-command",
@@ -631,8 +634,9 @@ describe("projectProvisioning", () => {
     );
     expect(resolve(workDir, "projects", "habit-cli")).toBe(result.record.cwd);
     expect(JSON.parse(await readFile(getActiveProjectStatePath(workDir), "utf8"))).toEqual({
-      version: 1,
+      version: 2,
       activeProjectSlug: "habit-cli",
+      selectionState: "active",
       updatedAt: expect.any(String),
       requestedBy: "discord:operator-1",
       source: "project-provisioning",

@@ -989,6 +989,100 @@ describe("operatorControl", () => {
     );
   });
 
+  it("acknowledges an authorized /stopProject request and keeps the runtime online", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const onStopProject = vi.fn().mockResolvedValue({
+      ok: true,
+      action: "stopped",
+      message: "Project `habit-cli` will not be selected again until `/startProject <project-name>` is used.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+      },
+    });
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: "7160", content: "boot", author: { id: "someone" } }]), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ id: "7161", content: "/stopProject", author: { id: "operator-1" } }]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-stop" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await pollDiscordGracefulShutdownCommand(workDir, { onStopProject });
+
+    expect(onStopProject).toHaveBeenCalledWith({
+      messageId: "7161",
+      requestedAt: expect.any(String),
+      requestedBy: "discord:operator-1",
+    });
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      "https://discord.com/api/v10/channels/channel-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: [
+            "<@operator-1> Stopped current project `Habit CLI`.",
+            "Project `habit-cli` will not be selected again until `/startProject <project-name>` is used.",
+            "Runtime remains online and is waiting for further operator commands.",
+          ].join("\n"),
+        }),
+      }),
+    );
+  });
+
+  it("acknowledges invalid authorized /stopProject commands without calling the handler", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const onStopProject = vi.fn();
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: "7170", content: "boot", author: { id: "someone" } }]), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ id: "7171", content: "/stopProject now", author: { id: "operator-1" } }]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-stop-invalid" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await pollDiscordGracefulShutdownCommand(workDir, { onStopProject });
+
+    expect(onStopProject).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      "https://discord.com/api/v10/channels/channel-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: [
+            "<@operator-1> Could not stop the current project.",
+            "`/stopProject` does not take any arguments.",
+            "Usage: `/stopProject`",
+          ].join("\n"),
+        }),
+      }),
+    );
+  });
+
   it("acknowledges invalid authorized /startProject commands without calling the handler", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
@@ -1106,6 +1200,33 @@ describe("operatorControl", () => {
     await pollDiscordGracefulShutdownCommand(workDir, { onStartProject });
 
     expect(onStartProject).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores /stopProject messages from unauthorized users", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const onStopProject = vi.fn();
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: "7310", content: "boot", author: { id: "someone" } }]), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ id: "7311", content: "/stopProject", author: { id: "intruder-1" } }]),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await pollDiscordGracefulShutdownCommand(workDir, { onStopProject });
+
+    expect(onStopProject).not.toHaveBeenCalled();
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
