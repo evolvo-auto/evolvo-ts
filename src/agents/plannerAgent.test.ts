@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const threadRunMock = vi.fn();
@@ -204,6 +207,76 @@ describe("plannerAgent", () => {
     warnSpy.mockRestore();
   });
 
+  it("persists replenishment failure artifacts with planner prompt and raw final response", async () => {
+    const rawFinalResponse = JSON.stringify({ result: [] });
+    threadRunMock.mockResolvedValueOnce({
+      finalResponse: rawFinalResponse,
+    });
+    const createPlannedIssuesMock = vi.fn();
+    const issueManager = {
+      listOpenIssues: vi.fn().mockResolvedValueOnce([
+        { number: 17, title: "Open reliability gap", description: "Still open.", state: "open", labels: [] },
+      ]),
+      listRecentClosedIssues: vi.fn().mockResolvedValueOnce([
+        { number: 16, title: "Closed planning fix", description: "Already done.", state: "closed", labels: [] },
+      ]),
+      createPlannedIssues: createPlannedIssuesMock,
+    } as unknown as import("../issues/taskIssueManager.js").TaskIssueManager;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { runPlannerAgent } = await import("./plannerAgent.js");
+    const workDir = await mkdtemp(join(tmpdir(), "planner-agent-"));
+
+    try {
+      const result = await runPlannerAgent({
+        cycle: 2,
+        openIssueCount: 1,
+        minimumIssueCount: 3,
+        maximumOpenIssues: 5,
+        issueManager,
+        workDir,
+      });
+
+      const artifactPath = join(workDir, ".evolvo", "planner-replenishment-failure.json");
+      const artifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        schemaVersion: number;
+        cycle: number;
+        openIssueCount: number;
+        startupBootstrap: boolean;
+        plannerPrompt: string | null;
+        finalResponse: string | null;
+        error: {
+          name: string;
+          message: string;
+          stack: string | null;
+        };
+      };
+
+      expect(artifact.schemaVersion).toBe(1);
+      expect(artifact.cycle).toBe(2);
+      expect(artifact.openIssueCount).toBe(1);
+      expect(artifact.startupBootstrap).toBe(false);
+      expect(artifact.plannerPrompt).toContain("Current open issues:\n- #17 Open reliability gap");
+      expect(artifact.plannerPrompt).toContain("Recently closed issues:\n- #16 Closed planning fix");
+      expect(artifact.finalResponse).toBe(rawFinalResponse);
+      expect(artifact.error.name).toBe("Error");
+      expect(artifact.error.message).toBe("Planner response did not contain an issues array.");
+      expect(typeof artifact.error.stack).toBe("string");
+      expect(errorSpy).toHaveBeenNthCalledWith(
+        1,
+        "Queue repository analysis failed during replenishment planning: Planner response did not contain an issues array.",
+      );
+      expect(errorSpy).toHaveBeenNthCalledWith(
+        2,
+        "Planner replenishment failure artifact saved to `.evolvo/planner-replenishment-failure.json`.",
+      );
+      expect(createPlannedIssuesMock).not.toHaveBeenCalled();
+      expect(result).toEqual({ created: [], startupBootstrap: false });
+    } finally {
+      errorSpy.mockRestore();
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns no created issues when planner analysis fails", async () => {
     threadRunMock.mockRejectedValueOnce(new Error("planner failed"));
     const createPlannedIssuesMock = vi.fn();
@@ -214,18 +287,41 @@ describe("plannerAgent", () => {
     } as unknown as import("../issues/taskIssueManager.js").TaskIssueManager;
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { runPlannerAgent } = await import("./plannerAgent.js");
+    const workDir = await mkdtemp(join(tmpdir(), "planner-agent-"));
 
-    const result = await runPlannerAgent({
-      cycle: 2,
-      openIssueCount: 1,
-      minimumIssueCount: 3,
-      maximumOpenIssues: 5,
-      issueManager,
-      workDir: "/tmp/evolvo",
-    });
+    try {
+      const result = await runPlannerAgent({
+        cycle: 2,
+        openIssueCount: 1,
+        minimumIssueCount: 3,
+        maximumOpenIssues: 5,
+        issueManager,
+        workDir,
+      });
 
-    expect(errorSpy).toHaveBeenCalledWith("Queue repository analysis failed during replenishment planning: planner failed");
-    expect(createPlannedIssuesMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ created: [], startupBootstrap: false });
+      const artifact = JSON.parse(
+        await readFile(join(workDir, ".evolvo", "planner-replenishment-failure.json"), "utf8"),
+      ) as {
+        plannerPrompt: string | null;
+        finalResponse: string | null;
+        error: {
+          message: string;
+        };
+      };
+
+      expect(errorSpy).toHaveBeenNthCalledWith(1, "Queue repository analysis failed during replenishment planning: planner failed");
+      expect(errorSpy).toHaveBeenNthCalledWith(
+        2,
+        "Planner replenishment failure artifact saved to `.evolvo/planner-replenishment-failure.json`.",
+      );
+      expect(artifact.plannerPrompt).toContain("Current open issues:\n- none");
+      expect(artifact.finalResponse).toBeNull();
+      expect(artifact.error.message).toBe("planner failed");
+      expect(createPlannedIssuesMock).not.toHaveBeenCalled();
+      expect(result).toEqual({ created: [], startupBootstrap: false });
+    } finally {
+      errorSpy.mockRestore();
+      await rm(workDir, { recursive: true, force: true });
+    }
   });
 });
