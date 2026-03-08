@@ -617,12 +617,18 @@ describe("main", () => {
     expect(addProgressCommentMock).toHaveBeenCalledWith(12, expect.stringContaining("## Task Start"));
     expect(addProgressCommentMock).toHaveBeenCalledWith(12, expect.stringContaining("## Task Execution Log"));
     expect(notifyIssueStartedInDiscordMock).toHaveBeenCalledWith({
-      issueNumber: 12,
-      issueTitle: "Fix login redirect",
-      issueUrl: "https://github.com/owner/repo/issues/12",
-      trackerRepository: "owner/repo",
-      executionProject: "Evolvo (`evolvo`)",
-      executionRepository: "owner/repo",
+      issue: {
+        number: 12,
+        title: "Fix login redirect",
+      },
+      executionContext: {
+        trackerRepository: "owner/repo",
+        executionRepository: "owner/repo",
+        project: {
+          displayName: "Evolvo",
+          slug: "evolvo",
+        },
+      },
       lifecycleState: "selected -> executing",
     });
     expect(configureCodingAgentExecutionContextMock).toHaveBeenCalledWith({
@@ -656,9 +662,9 @@ describe("main", () => {
           kind: "managed",
           issueLabel: "project:habit-cli",
           trackerRepo: {
-            owner: "owner",
-            repo: "repo",
-            url: "https://github.com/owner/repo",
+            owner: "tracker-org",
+            repo: "issue-tracker",
+            url: "https://github.com/tracker-org/issue-tracker",
           },
           executionRepo: {
             owner: "owner",
@@ -678,7 +684,7 @@ describe("main", () => {
             lastError: null,
           },
         },
-        trackerRepository: "owner/repo",
+        trackerRepository: "tracker-org/issue-tracker",
         executionRepository: "owner/habit-cli",
       },
     });
@@ -687,18 +693,24 @@ describe("main", () => {
     await main();
 
     expect(notifyIssueStartedInDiscordMock).toHaveBeenCalledWith({
-      issueNumber: 14,
-      issueTitle: "Managed repo issue",
-      issueUrl: "https://github.com/owner/repo/issues/14",
-      trackerRepository: "owner/repo",
-      executionProject: "Habit CLI (`habit-cli`)",
-      executionRepository: "owner/habit-cli",
+      issue: {
+        number: 14,
+        title: "Managed repo issue",
+      },
+      executionContext: {
+        trackerRepository: "tracker-org/issue-tracker",
+        executionRepository: "owner/habit-cli",
+        project: {
+          displayName: "Habit CLI",
+          slug: "habit-cli",
+        },
+      },
       lifecycleState: "selected -> executing",
     });
     expect(configureCodingAgentExecutionContextMock).toHaveBeenCalledWith({
       workDir: "/tmp/evolvo/projects/habit-cli",
       internalRepositoryUrls: [
-        "https://github.com/owner/repo",
+        "https://github.com/tracker-org/issue-tracker",
         "https://github.com/owner/habit-cli",
       ],
     });

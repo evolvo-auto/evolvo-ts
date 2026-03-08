@@ -6,6 +6,8 @@ import {
   type GracefulShutdownRequest,
   writeDiscordControlCursor,
 } from "./gracefulShutdown.js";
+import type { IssueSummary } from "../issues/taskIssueManager.js";
+import type { ProjectExecutionContext } from "../projects/projectExecutionContext.js";
 import { normalizeProjectNameInput } from "../projects/projectNaming.js";
 
 type DiscordControlConfig = {
@@ -68,13 +70,16 @@ type DiscordOperatorStep =
   | "send-start-project-ack";
 
 type DiscordIssueStartNotification = {
-  issueNumber: number;
-  issueTitle: string;
-  issueUrl: string;
-  trackerRepository: string;
-  executionProject: string;
-  executionRepository: string;
-  lifecycleState: string;
+  issue: Pick<IssueSummary, "number" | "title">;
+  executionContext: {
+    trackerRepository: ProjectExecutionContext["trackerRepository"] | null;
+    executionRepository: ProjectExecutionContext["executionRepository"] | null;
+    project: {
+      displayName: ProjectExecutionContext["project"]["displayName"] | null;
+      slug: ProjectExecutionContext["project"]["slug"] | null;
+    } | null;
+  };
+  lifecycleState: string | null;
 };
 
 type DiscordControlMessage = {
@@ -176,6 +181,38 @@ function buildAuthHeaders(config: DiscordControlConfig): Record<string, string> 
   };
 }
 
+function normalizeInlineText(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function buildIssueStartProjectLabel(notification: DiscordIssueStartNotification): string {
+  const displayName = normalizeInlineText(notification.executionContext.project?.displayName);
+  const slug = normalizeInlineText(notification.executionContext.project?.slug);
+  if (displayName && slug) {
+    return `${displayName} (\`${slug}\`)`;
+  }
+
+  if (displayName) {
+    return displayName;
+  }
+
+  if (slug) {
+    return `\`${slug}\``;
+  }
+
+  return "unavailable";
+}
+
+function buildIssueStartIssueUrl(notification: DiscordIssueStartNotification): string | null {
+  const trackerRepository = normalizeInlineText(notification.executionContext.trackerRepository);
+  if (!trackerRepository || !/^[^/\s]+\/[^/\s]+$/.test(trackerRepository)) {
+    return null;
+  }
+
+  return `https://github.com/${trackerRepository}/issues/${notification.issue.number}`;
+}
+
 async function fetchDiscordJson<T>(
   config: DiscordControlConfig,
   path: string,
@@ -229,52 +266,60 @@ async function sendIssueStartNotification(
   config: DiscordControlConfig,
   notification: DiscordIssueStartNotification,
 ): Promise<void> {
+  const issueUrl = buildIssueStartIssueUrl(notification);
+  const issueTitle = normalizeInlineText(notification.issue.title) ?? "unavailable";
+  const lifecycleState = normalizeInlineText(notification.lifecycleState) ?? "unknown";
+  const trackerRepository = normalizeInlineText(notification.executionContext.trackerRepository) ?? "unknown";
+  const executionProject = buildIssueStartProjectLabel(notification);
+  const executionRepository = normalizeInlineText(notification.executionContext.executionRepository) ?? "unknown";
   await fetchDiscordJson<{ id: string }>(config, `/channels/${config.controlChannelId}/messages`, {
     method: "POST",
     body: JSON.stringify({
       content: `<@${config.operatorUserId}>`,
       embeds: [
         {
-          title: `Started Issue #${notification.issueNumber}`,
-          description: notification.issueTitle,
-          url: notification.issueUrl,
+          title: `Started Issue #${notification.issue.number}`,
+          description: issueTitle,
+          ...(issueUrl ? { url: issueUrl } : {}),
           fields: [
             {
               name: "State",
-              value: notification.lifecycleState,
+              value: lifecycleState,
               inline: true,
             },
             {
               name: "Tracker Repository",
-              value: notification.trackerRepository,
+              value: trackerRepository,
               inline: true,
             },
             {
               name: "Execution Project",
-              value: notification.executionProject,
+              value: executionProject,
               inline: true,
             },
             {
               name: "Execution Repository",
-              value: notification.executionRepository,
+              value: executionRepository,
               inline: true,
             },
           ],
         },
       ],
-      components: [
-        {
-          type: 1,
-          components: [
+      components: issueUrl
+        ? [
             {
-              type: 2,
-              style: 5,
-              label: "Open GitHub Issue",
-              url: notification.issueUrl,
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 5,
+                  label: "Open GitHub Issue",
+                  url: issueUrl,
+                },
+              ],
             },
-          ],
-        },
-      ],
+          ]
+        : [],
     }),
   });
 }
