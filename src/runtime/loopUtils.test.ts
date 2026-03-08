@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GitHubApiError } from "../github/githubClient.js";
-import { getRunLoopRetryDelayMs, isTransientGitHubError, selectIssueForWork, waitForRunLoopRetry } from "./loopUtils.js";
+import {
+  getRunLoopRetryDelayMs,
+  isTransientGitHubError,
+  prioritizeIssuesForWork,
+  selectIssueForWork,
+  waitForRunLoopRetry,
+} from "./loopUtils.js";
 
 describe("loopUtils retry handling", () => {
   afterEach(() => {
@@ -82,6 +88,38 @@ describe("loopUtils retry handling", () => {
     ]);
 
     expect(selected?.number).toBe(2);
+  });
+
+  it("prioritizes the more foundational issue within a related topic cluster", () => {
+    const decision = prioritizeIssuesForWork([
+      {
+        number: 30,
+        title: "Polish planner log wording",
+        description: "Tidy planner selection log copy for readability.",
+        state: "open",
+        labels: [],
+      },
+      {
+        number: 31,
+        title: "Harden planner dependency ordering",
+        description: "Choose the foundational planner selection issue first so it can unblock related planner tasks.",
+        state: "open",
+        labels: [],
+      },
+      {
+        number: 32,
+        title: "Document planner selection examples",
+        description: "Add planner selection examples for future operator review.",
+        state: "open",
+        labels: [],
+      },
+    ]);
+
+    expect(decision.selectedIssue?.number).toBe(31);
+    expect(decision.candidateCount).toBe(3);
+    expect(decision.rationale).toContain("dependency or unblock potential");
+    expect(decision.rationale).toContain("core runtime/control surface");
+    expect(decision.rationale).toContain("shared topic with 2 other open issues");
   });
 
   it("prefers issues for the active project when one is selected", () => {

@@ -28,7 +28,8 @@ import {
   logCreatedIssues,
   logCycleQueueHealth,
   logGitHubFallback,
-  selectIssueForWork,
+  logIssuePrioritizationDecision,
+  prioritizeIssuesForWork,
   waitForRunLoopRetry,
 } from "./runtime/loopUtils.js";
 import {
@@ -484,10 +485,11 @@ export async function main(): Promise<void> {
             return;
           }
 
-          const selectedIssue = selectIssueForWork(retryEligibleIssues, {
+          const selectionDecision = prioritizeIssuesForWork(retryEligibleIssues, {
             activeProjectSlug: activeProjectState.selectionState === "active" ? activeProjectState.activeProjectSlug : null,
             stoppedProjectSlug: activeProjectState.selectionState === "stopped" ? activeProjectState.activeProjectSlug : null,
           });
+          const selectedIssue = selectionDecision.selectedIssue;
           if (selectedIssue !== null || activeProjectState.selectionState !== "stopped") {
             stoppedProjectIdleLoggedSlug = null;
           }
@@ -581,6 +583,7 @@ export async function main(): Promise<void> {
             return;
           }
 
+          logIssuePrioritizationDecision(selectionDecision);
           logCycleQueueHealth({
             cycle,
             openCount: openIssues.length,

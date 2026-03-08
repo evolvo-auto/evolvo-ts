@@ -844,6 +844,36 @@ describe("main", () => {
     );
   });
 
+  it("logs issue prioritization reasoning when related issues compete", async () => {
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 101, title: "Planner copy polish", description: "Tidy planner selection copy.", state: "open", labels: [] },
+        {
+          number: 102,
+          title: "Planner dependency ordering",
+          description: "Choose the foundational planner selection issue first so it can unblock related planner tasks.",
+          state: "open",
+          labels: [],
+        },
+        { number: 103, title: "Planner selection docs", description: "Document planner selection examples.", state: "open", labels: [] },
+      ])
+      .mockResolvedValueOnce([]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(markInProgressMock).toHaveBeenCalledWith(102);
+    expect(runCodingAgentMock).toHaveBeenCalledWith(
+      "Issue #102: Planner dependency ordering\n\nChoose the foundational planner selection issue first so it can unblock related planner tasks.",
+    );
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Issue prioritization selected #102 Planner dependency ordering over 2 other candidate(s):",
+      ),
+    );
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("dependency or unblock potential"));
+  });
+
   it("resolves managed-project execution context before running the coding agent", async () => {
     listOpenIssuesMock
       .mockResolvedValueOnce([
