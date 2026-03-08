@@ -118,7 +118,7 @@ export async function runPostMergeSelfRestart(workingDirectory: string): Promise
   const defaultBranch = await resolveRepositoryDefaultBranch(workingDirectory);
   await runStep("git", ["checkout", defaultBranch], workingDirectory);
   await runStep("git", ["pull", "--ff-only"], workingDirectory);
-  await runStep("pnpm", ["i"], workingDirectory);
+  await runStep("pnpm", ["install", "--frozen-lockfile"], workingDirectory);
   await runStep("pnpm", ["build"], workingDirectory);
   await startUpdatedRuntime(workingDirectory);
 }
