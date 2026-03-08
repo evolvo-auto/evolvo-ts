@@ -1,6 +1,7 @@
 import type { DefaultProjectContext, ProjectRecord } from "../projects/projectRegistry.js";
 import { findProjectBySlug, readProjectRegistry } from "../projects/projectRegistry.js";
 import type { ActiveProjectState } from "../projects/activeProjectState.js";
+import { readActiveProjectsState } from "../projects/activeProjectsState.js";
 import type {
   IssueSummary,
   TaskIssueManager,
@@ -24,6 +25,7 @@ export type UnifiedIssueQueue = {
   issues: UnifiedIssue[];
   unauthorizedClosures: UnauthorizedIssueClosureResult[];
   activeManagedProject: ProjectRecord | null;
+  activeManagedProjects: ProjectRecord[];
 };
 
 function buildRepositoryReference(repository: { owner: string; repo: string }): string {
@@ -65,25 +67,51 @@ function buildProjectUnifiedIssue(issue: IssueSummary, project: ProjectRecord): 
   };
 }
 
-async function resolveActiveManagedProject(
+function isActiveManagedProject(project: ProjectRecord | null): project is ProjectRecord {
+  return project !== null && project.kind === "managed" && project.status === "active";
+}
+
+async function resolveManagedProjectQueueState(
   workDir: string,
   defaultProject: DefaultProjectContext,
   activeProjectState: ActiveProjectState,
-): Promise<ProjectRecord | null> {
+): Promise<{
+  activeManagedProject: ProjectRecord | null;
+  activeManagedProjects: ProjectRecord[];
+}> {
+  const [registry, activeProjectsState] = await Promise.all([
+    readProjectRegistry(workDir, defaultProject),
+    readActiveProjectsState(workDir),
+  ]);
+
+  const activeManagedProjectsBySlug = new Map<string, ProjectRecord>();
+  for (const entry of activeProjectsState.projects) {
+    const project = findProjectBySlug(registry, entry.slug);
+    if (!isActiveManagedProject(project)) {
+      continue;
+    }
+
+    activeManagedProjectsBySlug.set(project.slug, project);
+  }
+
+  let activeManagedProject: ProjectRecord | null = null;
   if (
-    activeProjectState.selectionState !== "active" ||
-    activeProjectState.activeProjectSlug === null
+    activeProjectState.selectionState === "active"
+    && activeProjectState.activeProjectSlug !== null
   ) {
-    return null;
+    const focusedProject = findProjectBySlug(registry, activeProjectState.activeProjectSlug);
+    if (isActiveManagedProject(focusedProject)) {
+      activeManagedProject = focusedProject;
+      activeManagedProjectsBySlug.set(focusedProject.slug, focusedProject);
+    }
   }
 
-  const registry = await readProjectRegistry(workDir, defaultProject);
-  const project = findProjectBySlug(registry, activeProjectState.activeProjectSlug);
-  if (!project || project.kind !== "managed" || project.status !== "active") {
-    return null;
-  }
-
-  return project;
+  return {
+    activeManagedProject,
+    activeManagedProjects: [...activeManagedProjectsBySlug.values()].sort((left, right) =>
+      left.slug.localeCompare(right.slug)
+    ),
+  };
 }
 
 export async function buildUnifiedIssueQueue(options: {
@@ -93,26 +121,31 @@ export async function buildUnifiedIssueQueue(options: {
   activeProjectState: ActiveProjectState;
 }): Promise<UnifiedIssueQueue> {
   const trackerInventory = await options.trackerIssueManager.listAuthorizedOpenIssues();
-  const activeManagedProject = await resolveActiveManagedProject(
+  const managedProjectQueueState = await resolveManagedProjectQueueState(
     options.workDir,
     options.defaultProject,
     options.activeProjectState,
   );
+  const { activeManagedProject, activeManagedProjects } = managedProjectQueueState;
 
   const issues: UnifiedIssue[] = trackerInventory.issues.map((issue) => buildTrackerUnifiedIssue(issue, options.defaultProject));
 
-  if (activeManagedProject !== null) {
-    const projectIssueManager = options.trackerIssueManager.forRepository({
-      owner: activeManagedProject.executionRepo.owner,
-      repo: activeManagedProject.executionRepo.repo,
-    });
-    const projectIssues = await projectIssueManager.listOpenIssues();
-    issues.unshift(...projectIssues.map((issue) => buildProjectUnifiedIssue(issue, activeManagedProject)));
+  if (activeManagedProjects.length > 0) {
+    const projectIssues = await Promise.all(activeManagedProjects.map(async (project) => {
+      const projectIssueManager = options.trackerIssueManager.forRepository({
+        owner: project.executionRepo.owner,
+        repo: project.executionRepo.repo,
+      });
+      const issuesForProject = await projectIssueManager.listOpenIssues();
+      return issuesForProject.map((issue) => buildProjectUnifiedIssue(issue, project));
+    }));
+    issues.unshift(...projectIssues.flat());
   }
 
   return {
     issues,
     unauthorizedClosures: trackerInventory.unauthorizedClosures,
     activeManagedProject,
+    activeManagedProjects,
   };
 }
