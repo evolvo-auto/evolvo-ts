@@ -18,6 +18,8 @@ describe("buildCodingPrompt", () => {
     const prompt = buildCodingPrompt("Issue #2: Branching capabilities");
 
     expect(prompt).toContain("branch from main before making changes");
+    expect(prompt).toContain("continue on that branch without asking for confirmation");
+    expect(prompt).toContain("do not ask whether you should create a branch");
     expect(prompt).toContain("open a pull request linked to the issue");
     expect(prompt).toContain("you are the Dev agent");
     expect(prompt).toContain("only the Planner moves work from Inbox into Planning");

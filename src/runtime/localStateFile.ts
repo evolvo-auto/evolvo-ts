@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 
@@ -26,12 +27,12 @@ function buildCorruptStatePath(statePath: string, atMs = Date.now()): string {
   );
 }
 
-function buildTempStatePath(statePath: string, atMs = Date.now()): string {
+function buildTempStatePath(statePath: string, atMs = Date.now(), suffix = randomUUID()): string {
   const extension = extname(statePath);
   const fileName = basename(statePath, extension);
   return join(
     dirname(statePath),
-    `${fileName}.tmp-${Math.max(0, Math.floor(atMs))}-${process.pid}${extension}`,
+    `${fileName}.tmp-${Math.max(0, Math.floor(atMs))}-${process.pid}-${suffix}${extension}`,
   );
 }
 

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readRecoverableJsonState,
+  writeAtomicJsonState,
   writeAtomicJsonStateIfMissing,
 } from "./localStateFile.js";
 
@@ -45,9 +46,6 @@ describe("localStateFile", () => {
 
     await expect(writeAtomicJsonStateIfMissing(statePath, { value: 2 })).resolves.toBe(true);
     await expect(readFile(statePath, "utf8")).resolves.toBe(`${JSON.stringify({ value: 2 }, null, 2)}\n`);
-    await expect(
-      access(join(workDir, ".evolvo", `test-state.tmp-${writeAtMs}-${process.pid}.json`)),
-    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readdir(join(workDir, ".evolvo"))).resolves.toEqual(["test-state.json"]);
   });
 
@@ -64,10 +62,24 @@ describe("localStateFile", () => {
 
     await expect(writeAtomicJsonStateIfMissing(statePath, { value: 4 })).resolves.toBe(false);
     await expect(readFile(statePath, "utf8")).resolves.toBe(`${JSON.stringify({ value: 3 }, null, 2)}\n`);
-    await expect(
-      access(join(evolvoDir, `test-state.tmp-${writeAtMs}-${process.pid}.json`)),
-    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readdir(evolvoDir)).resolves.toEqual(["test-state.json"]);
+  });
+
+  it("supports concurrent atomic writes created in the same millisecond", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-08T01:10:00.000Z"));
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const statePath = join(workDir, ".evolvo", "test-state.json");
+
+    await expect(Promise.all([
+      writeAtomicJsonState(statePath, { value: 1 }),
+      writeAtomicJsonState(statePath, { value: 2 }),
+    ])).resolves.toHaveLength(2);
+
+    const persisted = JSON.parse(await readFile(statePath, "utf8")) as { value: number };
+    expect([1, 2]).toContain(persisted.value);
+    await expect(readdir(join(workDir, ".evolvo"))).resolves.toEqual(["test-state.json"]);
   });
 
   it("preserves malformed JSON, rewrites the file with defaults, and warns", async () => {

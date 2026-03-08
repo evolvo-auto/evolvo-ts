@@ -312,6 +312,8 @@ Examples:
 
 For each selected issue:
 - branch from main before making changes
+- if the host has already started you on a working issue branch, continue on that branch without asking for confirmation
+- do not ask whether you should create a branch; choose the correct branching action yourself based on the current git state
 - do all implementation work on that issue branch
 - open a pull request linked to the issue when implementation is complete
 
