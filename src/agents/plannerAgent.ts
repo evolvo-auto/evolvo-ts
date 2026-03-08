@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { Codex, type ThreadOptions } from "@openai/codex-sdk";
 import {
   PLANNED_ISSUE_RECENT_CLOSED_LOOKBACK_LIMIT,
@@ -6,6 +7,7 @@ import {
   type PlannedIssueDraft,
   type TaskIssueManager,
 } from "../issues/taskIssueManager.js";
+import { writeAtomicJsonState } from "../runtime/localStateFile.js";
 
 export type PlannerAgentInput = {
   cycle: number;
@@ -53,6 +55,27 @@ const PLANNER_OUTPUT_SCHEMA = {
 type PlannerResponse = {
   issues: unknown[];
 };
+
+type PlannerFailureArtifact = {
+  schemaVersion: 1;
+  failedAtMs: number;
+  failedAtIso: string;
+  cycle: number;
+  openIssueCount: number;
+  minimumIssueCount: number;
+  maximumOpenIssues: number;
+  startupBootstrap: boolean;
+  plannerPrompt: string | null;
+  finalResponse: string | null;
+  error: {
+    name: string;
+    message: string;
+    stack: string | null;
+  };
+};
+
+const PLANNER_FAILURE_ARTIFACT_RELATIVE_PATH = ".evolvo/planner-replenishment-failure.json";
+const PLANNER_FAILURE_ARTIFACT_SCHEMA_VERSION = 1;
 
 function dedupeClosedIssueHistory(issues: IssueSummary[]): IssueSummary[] {
   const seen = new Set<string>();
@@ -156,8 +179,54 @@ function buildPlannerPrompt(input: PlannerAgentInput, openIssues: IssueSummary[]
   ].join("\n");
 }
 
+function summarizePlannerFailure(error: unknown): PlannerFailureArtifact["error"] {
+  if (error instanceof Error) {
+    return {
+      name: error.name || "Error",
+      message: error.message || "Unknown error.",
+      stack: typeof error.stack === "string" && error.stack.trim().length > 0 ? error.stack : null,
+    };
+  }
+
+  return {
+    name: "NonErrorThrownValue",
+    message: String(error),
+    stack: null,
+  };
+}
+
+async function persistPlannerFailureArtifact(options: {
+  input: PlannerAgentInput;
+  startupBootstrap: boolean;
+  plannerPrompt: string | null;
+  finalResponse: string | null;
+  error: unknown;
+}): Promise<string> {
+  const failedAtMs = Date.now();
+  const artifact: PlannerFailureArtifact = {
+    schemaVersion: PLANNER_FAILURE_ARTIFACT_SCHEMA_VERSION,
+    failedAtMs,
+    failedAtIso: new Date(failedAtMs).toISOString(),
+    cycle: options.input.cycle,
+    openIssueCount: options.input.openIssueCount,
+    minimumIssueCount: options.input.minimumIssueCount,
+    maximumOpenIssues: options.input.maximumOpenIssues,
+    startupBootstrap: options.startupBootstrap,
+    plannerPrompt: options.plannerPrompt,
+    finalResponse: options.finalResponse,
+    error: summarizePlannerFailure(options.error),
+  };
+  await writeAtomicJsonState(
+    join(options.input.workDir, PLANNER_FAILURE_ARTIFACT_RELATIVE_PATH),
+    artifact,
+  );
+  return PLANNER_FAILURE_ARTIFACT_RELATIVE_PATH;
+}
+
 export async function runPlannerAgent(input: PlannerAgentInput): Promise<PlannerAgentResult> {
   const startupBootstrap = input.cycle === 1 && input.openIssueCount === 0;
+  let plannerPrompt: string | null = null;
+  let plannerFinalResponse: string | null = null;
 
   try {
     const openIssues = await input.issueManager.listOpenIssues();
@@ -168,11 +237,12 @@ export async function runPlannerAgent(input: PlannerAgentInput): Promise<Planner
       ...PLANNER_THREAD_OPTIONS,
       workingDirectory: input.workDir,
     });
-    const plannerPrompt = buildPlannerPrompt(input, openIssues, recentClosedIssues);
+    plannerPrompt = buildPlannerPrompt(input, openIssues, recentClosedIssues);
     const turn = await thread.run(plannerPrompt, {
       outputSchema: PLANNER_OUTPUT_SCHEMA,
     });
-    const plannedIssues = parsePlannerResponse(turn.finalResponse);
+    plannerFinalResponse = turn.finalResponse;
+    const plannedIssues = parsePlannerResponse(plannerFinalResponse);
     const created = (
       await input.issueManager.createPlannedIssues({
         minimumIssueCount: input.minimumIssueCount,
@@ -190,6 +260,27 @@ export async function runPlannerAgent(input: PlannerAgentInput): Promise<Planner
       console.error(`Queue repository analysis failed during replenishment planning: ${error.message}`);
     } else {
       console.error("Queue repository analysis failed during replenishment planning with an unknown error.");
+    }
+
+    try {
+      const artifactPath = await persistPlannerFailureArtifact({
+        input,
+        startupBootstrap,
+        plannerPrompt,
+        finalResponse: plannerFinalResponse,
+        error,
+      });
+      console.error(`Planner replenishment failure artifact saved to \`${artifactPath}\`.`);
+    } catch (artifactError) {
+      if (artifactError instanceof Error) {
+        console.error(
+          `Could not persist planner replenishment failure artifact to \`${PLANNER_FAILURE_ARTIFACT_RELATIVE_PATH}\`: ${artifactError.message}`,
+        );
+      } else {
+        console.error(
+          `Could not persist planner replenishment failure artifact to \`${PLANNER_FAILURE_ARTIFACT_RELATIVE_PATH}\`: unknown error.`,
+        );
+      }
     }
 
     return {
