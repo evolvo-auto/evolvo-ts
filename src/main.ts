@@ -88,7 +88,7 @@ import {
   readProjectRegistry,
 } from "./projects/projectRegistry.js";
 
-const MAX_ISSUE_CYCLES = 5;
+const MAX_ISSUE_CYCLES = 10;
 const MIN_REPLENISH_ISSUES = 3;
 const MAX_OPEN_ISSUES = 5;
 const RUN_LOOP_GITHUB_MAX_RETRIES = 2;
