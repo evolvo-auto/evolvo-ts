@@ -254,6 +254,7 @@ describe("operatorControl", () => {
     vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
     vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
     vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(
@@ -266,6 +267,8 @@ describe("operatorControl", () => {
       issue: {
         number: 298,
         title: "Send a Discord embed notification with GitHub issue link when starting a new issue",
+        repository: "evolvo-auto/evolvo-ts",
+        url: "https://github.com/evolvo-auto/evolvo-ts/issues/298",
       },
       executionContext: {
         trackerRepository: "evolvo-auto/evolvo-ts",
@@ -279,6 +282,9 @@ describe("operatorControl", () => {
     });
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(logSpy).toHaveBeenCalledWith(
+      "[discord-issue-start] project=evolvo issueRepository=evolvo-auto/evolvo-ts trackerRepository=evolvo-auto/evolvo-ts executionRepository=evolvo-auto/evolvo-ts issueUrl=https://github.com/evolvo-auto/evolvo-ts/issues/298",
+    );
     expect(fetchSpy).toHaveBeenNthCalledWith(
       1,
       "https://discord.com/api/v10/channels/channel-1",
@@ -333,6 +339,95 @@ describe("operatorControl", () => {
                   style: 5,
                   label: "Open GitHub Issue",
                   url: "https://github.com/evolvo-auto/evolvo-ts/issues/298",
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("uses the project issue repository for project-mode embed links", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "channel-1", guild_id: "guild-1" }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "message-2" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await notifyIssueStartedInDiscord({
+      issue: {
+        number: 14,
+        title: "Fix project-mode links",
+        repository: "evolvo-auto/habit-cli",
+        url: "https://github.com/evolvo-auto/habit-cli/issues/14",
+      },
+      executionContext: {
+        trackerRepository: "evolvo-auto/evolvo-ts",
+        executionRepository: "evolvo-auto/habit-cli",
+        project: {
+          displayName: "Habit CLI",
+          slug: "habit-cli",
+        },
+      },
+      lifecycleState: "selected -> executing",
+    });
+
+    expect(logSpy).toHaveBeenCalledWith(
+      "[discord-issue-start] project=habit-cli issueRepository=evolvo-auto/habit-cli trackerRepository=evolvo-auto/evolvo-ts executionRepository=evolvo-auto/habit-cli issueUrl=https://github.com/evolvo-auto/habit-cli/issues/14",
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "https://discord.com/api/v10/channels/channel-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: "<@operator-1>",
+          embeds: [
+            {
+              title: "Started Issue #14",
+              description: "Fix project-mode links",
+              url: "https://github.com/evolvo-auto/habit-cli/issues/14",
+              fields: [
+                {
+                  name: "State",
+                  value: "selected -> executing",
+                  inline: true,
+                },
+                {
+                  name: "Tracker Repository",
+                  value: "evolvo-auto/evolvo-ts",
+                  inline: true,
+                },
+                {
+                  name: "Execution Project",
+                  value: "Habit CLI (`habit-cli`)",
+                  inline: true,
+                },
+                {
+                  name: "Execution Repository",
+                  value: "evolvo-auto/habit-cli",
+                  inline: true,
+                },
+              ],
+            },
+          ],
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 5,
+                  label: "Open GitHub Issue",
+                  url: "https://github.com/evolvo-auto/habit-cli/issues/14",
                 },
               ],
             },

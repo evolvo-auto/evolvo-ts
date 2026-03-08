@@ -156,7 +156,10 @@ export type CycleLimitDecisionConfirmation =
   };
 
 type DiscordIssueStartNotification = {
-  issue: Pick<IssueSummary, "number" | "title">;
+  issue: Pick<IssueSummary, "number" | "title"> & {
+    repository?: string | null;
+    url?: string | null;
+  };
   executionContext: {
     trackerRepository: ProjectExecutionContext["trackerRepository"] | null;
     executionRepository: ProjectExecutionContext["executionRepository"] | null;
@@ -349,6 +352,16 @@ function buildIssueStartProjectLabel(notification: DiscordIssueStartNotification
 }
 
 function buildIssueStartIssueUrl(notification: DiscordIssueStartNotification): string | null {
+  const explicitIssueUrl = normalizeInlineText(notification.issue.url);
+  if (explicitIssueUrl) {
+    return explicitIssueUrl;
+  }
+
+  const issueRepository = normalizeInlineText(notification.issue.repository);
+  if (issueRepository && /^[^/\s]+\/[^/\s]+$/.test(issueRepository)) {
+    return `https://github.com/${issueRepository}/issues/${notification.issue.number}`;
+  }
+
   const trackerRepository = normalizeInlineText(notification.executionContext.trackerRepository);
   if (!trackerRepository || !/^[^/\s]+\/[^/\s]+$/.test(trackerRepository)) {
     return null;
@@ -571,9 +584,14 @@ async function sendIssueStartNotification(
   const issueUrl = buildIssueStartIssueUrl(notification);
   const issueTitle = normalizeInlineText(notification.issue.title) ?? "unavailable";
   const lifecycleState = normalizeInlineText(notification.lifecycleState) ?? "unknown";
+  const issueRepository = normalizeInlineText(notification.issue.repository) ?? "unknown";
   const trackerRepository = normalizeInlineText(notification.executionContext.trackerRepository) ?? "unknown";
   const executionProject = buildIssueStartProjectLabel(notification);
   const executionRepository = normalizeInlineText(notification.executionContext.executionRepository) ?? "unknown";
+  const projectSlug = normalizeInlineText(notification.executionContext.project?.slug) ?? "none";
+  console.log(
+    `[discord-issue-start] project=${projectSlug} issueRepository=${issueRepository} trackerRepository=${trackerRepository} executionRepository=${executionRepository} issueUrl=${issueUrl ?? "unavailable"}`,
+  );
   await fetchDiscordJson<{ id: string }>(config, `/channels/${config.controlChannelId}/messages`, {
     method: "POST",
     body: JSON.stringify({
