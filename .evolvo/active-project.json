@@ -1,9 +1,0 @@
-{
-  "version": 2,
-  "activeProjectSlug": "evolvo-web",
-  "selectionState": "stopped",
-  "deferredStopMode": null,
-  "updatedAt": "2026-03-08T15:13:02.701Z",
-  "requestedBy": "discord:842064888335433798",
-  "source": "stop-project-command"
-}
