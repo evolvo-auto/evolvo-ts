@@ -345,10 +345,7 @@ describe("runWorkflowSchedulerCycle", () => {
 
     expect(result.summary.plannerMovedToPlanning).toBe(0);
     expect(result.summary.plannerMovedToReadyForDev).toBe(0);
-    expect(updateIssue).toHaveBeenCalledWith(4, {
-      title: "Tightened title",
-      description: "Tightened description",
-    });
+    expect(updateIssue).not.toHaveBeenCalled();
     expect(moveProjectItemToStage).not.toHaveBeenCalledWith(project, "item-4", "Ready for Dev");
   });
 
@@ -449,10 +446,7 @@ describe("runWorkflowSchedulerCycle", () => {
     });
 
     expect(result.summary.plannerMovedToPlanning).toBe(0);
-    expect(updateIssue).toHaveBeenCalledWith(25, {
-      title: "Clarified issue",
-      description: "Clarified description",
-    });
+    expect(updateIssue).not.toHaveBeenCalled();
     expect(moveProjectItemToStage).not.toHaveBeenCalledWith(project, "item-25", "Planning");
   });
 
@@ -465,7 +459,7 @@ describe("runWorkflowSchedulerCycle", () => {
       createItem(project, 31, "Planning"),
       createItem(project, 32, "Planning"),
       createItem(project, 33, "Planning"),
-      createItem(project, 34, "Planning"),
+      createItem(project, 34, "Ready for Dev"),
     ]);
     const postSplitInventory = createInventory(project, [
       createItem(project, 29, "Planning"),
@@ -473,7 +467,7 @@ describe("runWorkflowSchedulerCycle", () => {
       createItem(project, 31, "Planning"),
       createItem(project, 32, "Planning"),
       createItem(project, 33, "Planning"),
-      createItem(project, 34, "Planning"),
+      createItem(project, 34, "Ready for Dev"),
       createItem(project, 201, "Planning"),
       createItem(project, 202, "Planning"),
     ]);

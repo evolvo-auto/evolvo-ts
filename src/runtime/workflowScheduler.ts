@@ -161,127 +161,119 @@ async function runPlannerPass(options: {
       continue;
     }
 
-    let remainingPlanningCapacity = Math.max(
-      0,
-      PLANNING_LIMIT_PER_PROJECT - projectInventory.countsByStage.Planning,
-    );
-    let remainingReadyForDevCapacity = Math.max(
-      0,
-      READY_FOR_DEV_LIMIT_PER_PROJECT - projectInventory.countsByStage["Ready for Dev"],
-    );
+    const planningCapacityAvailable = projectInventory.countsByStage.Planning < PLANNING_LIMIT_PER_PROJECT;
+    const readyForDevCapacityAvailable = projectInventory.countsByStage["Ready for Dev"] < READY_FOR_DEV_LIMIT_PER_PROJECT;
+    const nextInboxItem = planningCapacityAvailable
+      ? projectInventory.items
+        .filter((item) => item.stage === "Inbox")
+        .sort((left, right) => left.issueNumber - right.issueNumber)[0] ?? null
+      : null;
+    const nextPlanningItem = readyForDevCapacityAvailable
+      ? projectInventory.items
+        .filter((item) => item.stage === "Planning")
+        .sort((left, right) => left.issueNumber - right.issueNumber)[0] ?? null
+      : null;
 
-    const planningItems = projectInventory.items
-      .filter((item) => item.stage === "Inbox" || item.stage === "Planning")
-      .sort((left, right) => left.issueNumber - right.issueNumber)
-      .slice(0, PLANNER_MAX_ISSUES_PER_PROJECT);
-    if (planningItems.length === 0) {
+    if (!nextInboxItem && !nextPlanningItem) {
       continue;
     }
 
     const issueManager = createRepositoryIssueManager(options.trackerIssueManager, projectInventory.project);
     const openIssues = await issueManager.listOpenIssues();
     const recentClosedIssues = await issueManager.listRecentClosedIssues(25);
-    const actions = await runPlanningStageAgent({
-      apiKey: OPENAI_API_KEY,
-      projectSlug: projectInventory.project.slug,
-      projectDisplayName: projectInventory.project.displayName,
-      repository: `${projectInventory.project.executionRepo.owner}/${projectInventory.project.executionRepo.repo}`,
-      maxIssues: PLANNER_MAX_ISSUES_PER_PROJECT,
-      planningIssues: planningItems.map((item) => ({
-        number: item.issueNumber,
-        title: item.title,
-        description: item.description,
-        stage: item.stage,
-      })),
-      openIssueTitles: openIssues.map((issue) => issue.title),
-      recentClosedIssueTitles: recentClosedIssues.map((issue) => issue.title),
-    });
-
-    for (const action of actions) {
-      const boardItem = planningItems.find((item) => item.issueNumber === action.issueNumber);
-      if (!boardItem) {
-        continue;
-      }
-
-      await issueManager.updateIssue(action.issueNumber, {
-        title: action.title,
-        description: action.description,
+    if (nextInboxItem) {
+      const [action] = await runPlanningStageAgent({
+        apiKey: OPENAI_API_KEY,
+        projectSlug: projectInventory.project.slug,
+        projectDisplayName: projectInventory.project.displayName,
+        repository: `${projectInventory.project.executionRepo.owner}/${projectInventory.project.executionRepo.repo}`,
+        maxIssues: 1,
+        planningIssues: [{
+          number: nextInboxItem.issueNumber,
+          title: nextInboxItem.title,
+          description: nextInboxItem.description,
+          stage: nextInboxItem.stage,
+        }],
+        openIssueTitles: openIssues.map((issue) => issue.title),
+        recentClosedIssueTitles: recentClosedIssues.map((issue) => issue.title),
       });
 
-      for (const splitIssue of action.splitIssues) {
-        const created = await issueManager.createIssue(splitIssue.title, splitIssue.description);
-        if (!created.ok || !created.issue) {
-          continue;
+      if (action && action.issueNumber === nextInboxItem.issueNumber) {
+        await issueManager.updateIssue(action.issueNumber, {
+          title: action.title,
+          description: action.description,
+        });
+
+        for (const splitIssue of action.splitIssues) {
+          const created = await issueManager.createIssue(splitIssue.title, splitIssue.description);
+          if (!created.ok || !created.issue) {
+            continue;
+          }
+
+          const splitBoardItem = await options.boardsClient.ensureRepositoryIssueItem(projectInventory.project, created.issue.number);
+          await options.boardsClient.moveProjectItemToStage(projectInventory.project, splitBoardItem.itemId, "Planning");
+          movedToPlanning += 1;
+          logAgent(projectInventory.project, "planner", `split #${action.issueNumber} into new Planning issue #${created.issue.number}.`);
         }
 
-        const splitBoardItem = await options.boardsClient.ensureRepositoryIssueItem(projectInventory.project, created.issue.number);
-        await options.boardsClient.moveProjectItemToStage(projectInventory.project, splitBoardItem.itemId, "Planning");
-        movedToPlanning += 1;
-        logAgent(projectInventory.project, "planner", `split #${action.issueNumber} into new Planning issue #${created.issue.number}.`);
-      }
-
-      if (action.decision === "planning" || boardItem.stage === "Inbox") {
-        const allowPlanningOverflow = action.splitIssues.length > 0;
-
-        if (boardItem.stage === "Inbox" && remainingPlanningCapacity <= 0 && !allowPlanningOverflow) {
-          logAgent(
-            projectInventory.project,
-            "planner",
-            `kept #${action.issueNumber} in Inbox because Planning is at capacity (${PLANNING_LIMIT_PER_PROJECT}).`,
-          );
-        } else if (boardItem.stage === "Inbox") {
-          await options.boardsClient.moveProjectItemToStage(projectInventory.project, boardItem.boardItemId, "Planning");
+        if (action.decision === "blocked") {
+          await options.boardsClient.moveProjectItemToStage(projectInventory.project, nextInboxItem.boardItemId, "Blocked");
+          await issueManager.updateLabels(action.issueNumber, {
+            add: ["blocked"],
+            remove: ["in progress", "completed"],
+          });
           await recordProjectStageTransition({
             workDir: options.workDir,
             slug: projectInventory.project.slug,
-            from: boardItem.stage,
+            from: nextInboxItem.stage,
+            to: "Blocked",
+            reason: action.reasons.join("; "),
+          });
+          blocked += 1;
+          logAgent(projectInventory.project, "planner", `blocked #${action.issueNumber}.`);
+        } else {
+          await options.boardsClient.moveProjectItemToStage(projectInventory.project, nextInboxItem.boardItemId, "Planning");
+          await recordProjectStageTransition({
+            workDir: options.workDir,
+            slug: projectInventory.project.slug,
+            from: nextInboxItem.stage,
             to: "Planning",
             reason: action.reasons.join("; "),
           });
-          if (remainingPlanningCapacity > 0) {
-            remainingPlanningCapacity -= 1;
-          }
           movedToPlanning += 1;
           logAgent(projectInventory.project, "planner", `planned #${action.issueNumber} and moved it to Planning.`);
-        } else {
-          logAgent(projectInventory.project, "planner", `refined #${action.issueNumber} in Planning.`);
         }
-      } else if (action.decision === "ready-for-dev") {
-        if (remainingReadyForDevCapacity <= 0) {
-          logAgent(
-            projectInventory.project,
-            "planner",
-            `kept #${action.issueNumber} in ${boardItem.stage} because Ready for Dev is at capacity (${READY_FOR_DEV_LIMIT_PER_PROJECT}).`,
-          );
-          continue;
-        }
+      }
+    }
 
-        await options.boardsClient.moveProjectItemToStage(projectInventory.project, boardItem.boardItemId, "Ready for Dev");
+    if (nextPlanningItem) {
+      const [action] = await runPlanningStageAgent({
+        apiKey: OPENAI_API_KEY,
+        projectSlug: projectInventory.project.slug,
+        projectDisplayName: projectInventory.project.displayName,
+        repository: `${projectInventory.project.executionRepo.owner}/${projectInventory.project.executionRepo.repo}`,
+        maxIssues: 1,
+        planningIssues: [{
+          number: nextPlanningItem.issueNumber,
+          title: nextPlanningItem.title,
+          description: nextPlanningItem.description,
+          stage: nextPlanningItem.stage,
+        }],
+        openIssueTitles: openIssues.map((issue) => issue.title),
+        recentClosedIssueTitles: recentClosedIssues.map((issue) => issue.title),
+      });
+
+      if (action && action.issueNumber === nextPlanningItem.issueNumber && action.decision === "ready-for-dev") {
+        await options.boardsClient.moveProjectItemToStage(projectInventory.project, nextPlanningItem.boardItemId, "Ready for Dev");
         await recordProjectStageTransition({
           workDir: options.workDir,
           slug: projectInventory.project.slug,
-          from: boardItem.stage,
+          from: nextPlanningItem.stage,
           to: "Ready for Dev",
           reason: action.reasons.join("; "),
         });
-        remainingReadyForDevCapacity -= 1;
         movedToReadyForDev += 1;
         logAgent(projectInventory.project, "planner", `moved #${action.issueNumber} to Ready for Dev.`);
-      } else {
-        await options.boardsClient.moveProjectItemToStage(projectInventory.project, boardItem.boardItemId, "Blocked");
-        await issueManager.updateLabels(action.issueNumber, {
-          add: ["blocked"],
-          remove: ["in progress", "completed"],
-        });
-        await recordProjectStageTransition({
-          workDir: options.workDir,
-          slug: projectInventory.project.slug,
-          from: boardItem.stage,
-          to: "Blocked",
-          reason: action.reasons.join("; "),
-        });
-        blocked += 1;
-        logAgent(projectInventory.project, "planner", `blocked #${action.issueNumber}.`);
       }
     }
   }
