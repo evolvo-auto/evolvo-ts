@@ -125,7 +125,38 @@ describe("runtimeReadiness", () => {
     );
   });
 
-  it("fails when readiness file payload is malformed", async () => {
+  it("retries when the canonical readiness file is transiently malformed", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const signalPath = getRuntimeReadinessSignalPath(workDir);
+    await mkdir(join(workDir, ".evolvo"), { recursive: true });
+    await writeFile(signalPath, "{not-json", "utf8");
+
+    const waitPromise = waitForRuntimeReadinessSignal({
+      workDir,
+      token: "expected-token",
+      timeoutMs: 400,
+      pollIntervalMs: 20,
+      signalPath,
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
+    await writeRuntimeReadinessSignal({
+      workDir,
+      token: "expected-token",
+      signalPath,
+    });
+
+    await expect(waitPromise).resolves.toEqual(
+      expect.objectContaining({
+        token: "expected-token",
+        status: "ready",
+      }),
+    );
+  });
+
+  it("times out with malformed payload diagnostics when readiness file never becomes valid", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     const signalPath = getRuntimeReadinessSignalPath(workDir);
@@ -140,6 +171,8 @@ describe("runtimeReadiness", () => {
         pollIntervalMs: 10,
         signalPath,
       }),
-    ).rejects.toThrow(`Could not read runtime readiness signal at ${signalPath}`);
+    ).rejects.toThrow(
+      `Timed out after 80ms waiting for runtime readiness token expected-token at ${signalPath}. Last observed payload was malformed.`,
+    );
   });
 });

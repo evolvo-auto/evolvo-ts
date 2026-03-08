@@ -64,7 +64,7 @@ async function readRuntimeReadinessSignal(signalPath: string): Promise<RuntimeRe
     };
   } catch (error) {
     const errorCode = (error as NodeJS.ErrnoException).code;
-    if (errorCode === "ENOENT") {
+    if (errorCode === "ENOENT" || error instanceof SyntaxError) {
       return null;
     }
 
