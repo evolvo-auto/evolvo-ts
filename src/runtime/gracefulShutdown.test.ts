@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -170,6 +170,59 @@ describe("gracefulShutdown", () => {
       messageId: "9200",
       requestedAt: "2026-03-07T15:00:00.000Z",
     });
+  });
+
+  it("ignores interrupted temp files when persisting graceful shutdown requests", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const evolvoDir = join(workDir, ".evolvo");
+    await mkdir(evolvoDir, { recursive: true });
+    await writeFile(
+      join(evolvoDir, "graceful-shutdown-request.tmp-interrupted.json"),
+      "{\"messageId\":",
+      "utf8",
+    );
+
+    const result = await recordGracefulShutdownRequest(workDir, {
+      messageId: "9300",
+      requestedAt: "2026-03-07T17:00:00.000Z",
+    });
+
+    expect(result).toEqual({
+      created: true,
+      request: {
+        version: 1,
+        source: "discord",
+        command: "/quit",
+        mode: "after-current-task",
+        messageId: "9300",
+        requestedAt: "2026-03-07T17:00:00.000Z",
+      },
+    });
+    expect((await readdir(evolvoDir)).sort()).toEqual([
+      "graceful-shutdown-request.json",
+      "graceful-shutdown-request.tmp-interrupted.json",
+    ]);
+  });
+
+  it("ignores interrupted temp files when persisting Discord control cursors", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const evolvoDir = join(workDir, ".evolvo");
+    await mkdir(evolvoDir, { recursive: true });
+    await writeFile(
+      join(evolvoDir, "discord-control-cursor.tmp-interrupted.json"),
+      "{\"lastSeenMessageId\":",
+      "utf8",
+    );
+
+    await writeDiscordControlCursor(workDir, "9400");
+
+    await expect(readDiscordControlCursor(workDir)).resolves.toBe("9400");
+    expect((await readdir(evolvoDir)).sort()).toEqual([
+      "discord-control-cursor.json",
+      "discord-control-cursor.tmp-interrupted.json",
+    ]);
   });
 
   it("records Discord control receipts once per message id", async () => {

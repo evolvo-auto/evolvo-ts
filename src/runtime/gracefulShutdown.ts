@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
+import { writeAtomicJsonState } from "./localStateFile.js";
 
 const EVOLVO_DIRECTORY_NAME = ".evolvo";
 const GRACEFUL_SHUTDOWN_REQUEST_FILE_NAME = "graceful-shutdown-request.json";
@@ -92,8 +93,7 @@ function normalizeDiscordControlCursorState(raw: unknown): DiscordControlCursorS
 }
 
 async function writeJsonFile(path: string, value: unknown): Promise<void> {
-  await fs.mkdir(dirname(path), { recursive: true });
-  await fs.writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeAtomicJsonState(path, value);
 }
 
 function buildCorruptStatePath(path: string, atMs = Date.now()): string {
