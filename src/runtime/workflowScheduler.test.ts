@@ -343,12 +343,190 @@ describe("runWorkflowSchedulerCycle", () => {
       pullRequestClient: { submitReview: vi.fn() } as never,
     });
 
+    expect(result.summary.plannerMovedToPlanning).toBe(0);
     expect(result.summary.plannerMovedToReadyForDev).toBe(0);
     expect(updateIssue).toHaveBeenCalledWith(4, {
       title: "Tightened title",
       description: "Tightened description",
     });
     expect(moveProjectItemToStage).not.toHaveBeenCalledWith(project, "item-4", "Ready for Dev");
+  });
+
+  it("moves Inbox items to Planning before they can become Ready for Dev", async () => {
+    const { runWorkflowSchedulerCycle } = await import("./workflowScheduler.js");
+    const project = createProject();
+    const initialInventory = createInventory(project, [
+      createItem(project, 14, "Inbox"),
+    ]);
+    const postPlanningInventory = createInventory(project, [
+      createItem(project, 14, "Planning"),
+    ]);
+    buildStagedWorkInventoryMock
+      .mockResolvedValueOnce(initialInventory)
+      .mockResolvedValueOnce(postPlanningInventory);
+    runPlanningStageAgentMock.mockResolvedValue([
+      {
+        issueNumber: 14,
+        decision: "ready-for-dev",
+        title: "Implement stage-aware scheduler",
+        description: "Replace the old issue loop with board-stage scheduling.",
+        splitIssues: [],
+        reasons: ["The idea has been clarified into a real plan."],
+      },
+    ]);
+
+    const moveProjectItemToStage = vi.fn().mockResolvedValue(undefined);
+    const updateIssue = vi.fn().mockResolvedValue({ ok: true });
+    const trackerIssueManager = {
+      forRepository: vi.fn().mockReturnValue({
+        listOpenIssues: vi.fn().mockResolvedValue([]),
+        listRecentClosedIssues: vi.fn().mockResolvedValue([]),
+        updateIssue,
+      }),
+    };
+
+    const result = await runWorkflowSchedulerCycle({
+      workDir: "/tmp/evolvo-ts",
+      defaultProject: {
+        owner: "Evolvo-org",
+        repo: "evolvo-ts",
+        workDir: "/tmp/evolvo-ts",
+      },
+      trackerIssueManager: trackerIssueManager as never,
+      boardsClient: { moveProjectItemToStage } as never,
+      pullRequestClient: { submitReview: vi.fn() } as never,
+    });
+
+    expect(result.summary.plannerMovedToPlanning).toBe(1);
+    expect(result.summary.plannerMovedToReadyForDev).toBe(0);
+    expect(moveProjectItemToStage).toHaveBeenCalledWith(project, "item-14", "Planning");
+    expect(moveProjectItemToStage).not.toHaveBeenCalledWith(project, "item-14", "Ready for Dev");
+  });
+
+  it("keeps Inbox items in Inbox when Planning is already at capacity", async () => {
+    const { runWorkflowSchedulerCycle } = await import("./workflowScheduler.js");
+    const project = createProject();
+    const inventory = createInventory(project, [
+      createItem(project, 20, "Planning"),
+      createItem(project, 21, "Planning"),
+      createItem(project, 22, "Planning"),
+      createItem(project, 23, "Planning"),
+      createItem(project, 24, "Planning"),
+      createItem(project, 25, "Inbox"),
+    ]);
+    buildStagedWorkInventoryMock.mockResolvedValue(inventory);
+    runPlanningStageAgentMock.mockResolvedValue([
+      {
+        issueNumber: 25,
+        decision: "planning",
+        title: "Clarified issue",
+        description: "Clarified description",
+        splitIssues: [],
+        reasons: ["Needs to wait because Planning is already full."],
+      },
+    ]);
+
+    const moveProjectItemToStage = vi.fn().mockResolvedValue(undefined);
+    const updateIssue = vi.fn().mockResolvedValue({ ok: true });
+    const trackerIssueManager = {
+      forRepository: vi.fn().mockReturnValue({
+        listOpenIssues: vi.fn().mockResolvedValue([]),
+        listRecentClosedIssues: vi.fn().mockResolvedValue([]),
+        updateIssue,
+      }),
+    };
+
+    const result = await runWorkflowSchedulerCycle({
+      workDir: "/tmp/evolvo-ts",
+      defaultProject: {
+        owner: "Evolvo-org",
+        repo: "evolvo-ts",
+        workDir: "/tmp/evolvo-ts",
+      },
+      trackerIssueManager: trackerIssueManager as never,
+      boardsClient: { moveProjectItemToStage } as never,
+      pullRequestClient: { submitReview: vi.fn() } as never,
+    });
+
+    expect(result.summary.plannerMovedToPlanning).toBe(0);
+    expect(updateIssue).toHaveBeenCalledWith(25, {
+      title: "Clarified issue",
+      description: "Clarified description",
+    });
+    expect(moveProjectItemToStage).not.toHaveBeenCalledWith(project, "item-25", "Planning");
+  });
+
+  it("allows planner split issues to overflow Planning above five", async () => {
+    const { runWorkflowSchedulerCycle } = await import("./workflowScheduler.js");
+    const project = createProject();
+    const initialInventory = createInventory(project, [
+      createItem(project, 30, "Planning"),
+      createItem(project, 31, "Planning"),
+      createItem(project, 32, "Planning"),
+      createItem(project, 33, "Planning"),
+      createItem(project, 34, "Planning"),
+    ]);
+    const postSplitInventory = createInventory(project, [
+      createItem(project, 30, "Planning"),
+      createItem(project, 31, "Planning"),
+      createItem(project, 32, "Planning"),
+      createItem(project, 33, "Planning"),
+      createItem(project, 34, "Planning"),
+      createItem(project, 201, "Planning"),
+      createItem(project, 202, "Planning"),
+    ]);
+    buildStagedWorkInventoryMock
+      .mockResolvedValueOnce(initialInventory)
+      .mockResolvedValueOnce(postSplitInventory);
+    runPlanningStageAgentMock.mockResolvedValue([
+      {
+        issueNumber: 30,
+        decision: "planning",
+        title: "Split parent",
+        description: "Parent issue refined.",
+        splitIssues: [
+          { title: "Split child A", description: "A" },
+          { title: "Split child B", description: "B" },
+        ],
+        reasons: ["This work is better handled as multiple planned tickets."],
+      },
+    ]);
+
+    const createIssue = vi.fn()
+      .mockResolvedValueOnce({ ok: true, issue: { number: 201 } })
+      .mockResolvedValueOnce({ ok: true, issue: { number: 202 } });
+    const ensureRepositoryIssueItem = vi.fn()
+      .mockResolvedValueOnce({ itemId: "item-201" })
+      .mockResolvedValueOnce({ itemId: "item-202" });
+    const moveProjectItemToStage = vi.fn().mockResolvedValue(undefined);
+    const updateIssue = vi.fn().mockResolvedValue({ ok: true });
+    const trackerIssueManager = {
+      forRepository: vi.fn().mockReturnValue({
+        listOpenIssues: vi.fn().mockResolvedValue([]),
+        listRecentClosedIssues: vi.fn().mockResolvedValue([]),
+        updateIssue,
+        createIssue,
+      }),
+    };
+
+    const result = await runWorkflowSchedulerCycle({
+      workDir: "/tmp/evolvo-ts",
+      defaultProject: {
+        owner: "Evolvo-org",
+        repo: "evolvo-ts",
+        workDir: "/tmp/evolvo-ts",
+      },
+      trackerIssueManager: trackerIssueManager as never,
+      boardsClient: {
+        ensureRepositoryIssueItem,
+        moveProjectItemToStage,
+      } as never,
+      pullRequestClient: { submitReview: vi.fn() } as never,
+    });
+
+    expect(result.summary.plannerMovedToPlanning).toBe(2);
+    expect(moveProjectItemToStage).toHaveBeenCalledWith(project, "item-201", "Planning");
+    expect(moveProjectItemToStage).toHaveBeenCalledWith(project, "item-202", "Planning");
   });
 
   it("does not start a second dev item when one is already in In Dev", async () => {

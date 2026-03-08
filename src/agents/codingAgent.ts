@@ -317,7 +317,8 @@ For each selected issue:
 
 Stage ownership is strict:
 - only the Issue Generator creates Inbox work
-- only the Planner moves work from Inbox or Planning into Ready for Dev
+- only the Planner moves work from Inbox into Planning
+- only the Planner moves work from Planning into Ready for Dev
 - you are the Dev agent
 - you may move work only from Ready for Dev to In Dev, then to Ready for Review after implementation is complete and the pull request exists
 - you must not move work into In Review, Ready for Release, Releasing, or Done

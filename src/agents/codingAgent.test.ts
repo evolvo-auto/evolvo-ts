@@ -20,6 +20,8 @@ describe("buildCodingPrompt", () => {
     expect(prompt).toContain("branch from main before making changes");
     expect(prompt).toContain("open a pull request linked to the issue");
     expect(prompt).toContain("you are the Dev agent");
+    expect(prompt).toContain("only the Planner moves work from Inbox into Planning");
+    expect(prompt).toContain("only the Planner moves work from Planning into Ready for Dev");
     expect(prompt).toContain("you may move work only from Ready for Dev to In Dev, then to Ready for Review");
     expect(prompt).toContain("do not review the pull request yourself");
     expect(prompt).toContain("do not merge the pull request yourself");
