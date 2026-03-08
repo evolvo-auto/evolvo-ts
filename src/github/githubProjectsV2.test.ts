@@ -273,39 +273,81 @@ describe("GitHubProjectsV2Client", () => {
   });
 
   it("lists project issue items with stage metadata", async () => {
-    const graphql = vi.fn().mockResolvedValue({
-      node: {
-        items: {
-          nodes: [
-            {
-              id: "item-1",
-              fieldValueByName: {
-                name: "Ready for Dev",
-                optionId: "opt-ready",
-              },
-              content: {
-                id: "issue-node-1",
-                number: 17,
-                title: "Add queue scheduler",
-                body: "Implement the project scheduler.",
-                state: "OPEN",
-                url: "https://github.com/evolvo-auto/habit-cli/issues/17",
-                labels: {
-                  nodes: [{ name: "enhancement" }],
+    const graphql = vi.fn()
+      .mockResolvedValueOnce({
+        node: {
+          items: {
+            nodes: [
+              {
+                id: "item-1",
+                fieldValueByName: {
+                  name: "Ready for Dev",
+                  optionId: "opt-ready",
                 },
-                repository: {
-                  name: "habit-cli",
-                  url: "https://github.com/evolvo-auto/habit-cli",
-                  owner: {
-                    login: "evolvo-auto",
+                content: {
+                  id: "issue-node-1",
+                  number: 17,
+                  title: "Add queue scheduler",
+                  body: "Implement the project scheduler.",
+                  state: "OPEN",
+                  url: "https://github.com/evolvo-auto/habit-cli/issues/17",
+                  labels: {
+                    nodes: [{ name: "enhancement" }],
+                  },
+                  repository: {
+                    name: "habit-cli",
+                    url: "https://github.com/evolvo-auto/habit-cli",
+                    owner: {
+                      login: "evolvo-auto",
+                    },
                   },
                 },
               },
+            ],
+            pageInfo: {
+              endCursor: "cursor-1",
+              hasNextPage: true,
             },
-          ],
+          },
         },
-      },
-    });
+      })
+      .mockResolvedValueOnce({
+        node: {
+          items: {
+            nodes: [
+              {
+                id: "item-2",
+                fieldValueByName: {
+                  name: "Planning",
+                  optionId: "opt-planning",
+                },
+                content: {
+                  id: "issue-node-2",
+                  number: 18,
+                  title: "Follow up queue item",
+                  body: "",
+                  state: "OPEN",
+                  url: "https://github.com/evolvo-auto/habit-cli/issues/18",
+                  labels: {
+                    nodes: [],
+                  },
+                  repository: {
+                    name: "habit-cli",
+                    url: "https://github.com/evolvo-auto/habit-cli",
+                    owner: {
+                      login: "evolvo-auto",
+                    },
+                  },
+                },
+              },
+            ],
+            pageInfo: {
+              endCursor: null,
+              hasNextPage: false,
+            },
+          },
+        },
+      });
 
     const client = new GitHubProjectsV2Client({ graphql } as never);
     const project = {
@@ -337,6 +379,24 @@ describe("GitHubProjectsV2Client", () => {
         stage: "Ready for Dev",
         stageOptionId: "opt-ready",
       },
+      {
+        itemId: "item-2",
+        issueNodeId: "issue-node-2",
+        issueNumber: 18,
+        title: "Follow up queue item",
+        body: "",
+        state: "OPEN",
+        url: "https://github.com/evolvo-auto/habit-cli/issues/18",
+        labels: [],
+        repository: {
+          owner: "evolvo-auto",
+          repo: "habit-cli",
+          url: "https://github.com/evolvo-auto/habit-cli",
+          reference: "evolvo-auto/habit-cli",
+        },
+        stage: "Planning",
+        stageOptionId: "opt-planning",
+      },
     ]);
   });
 
@@ -365,34 +425,28 @@ describe("GitHubProjectsV2Client", () => {
       })
       .mockResolvedValueOnce({
         node: {
-          items: {
-            nodes: [
-              {
-                id: "item-22",
-                fieldValueByName: {
-                  name: "Inbox",
-                  optionId: "opt-inbox",
-                },
-                content: {
-                  id: "issue-node-22",
-                  number: 22,
-                  title: "Candidate issue",
-                  body: "",
-                  state: "OPEN",
-                  url: "https://github.com/evolvo-auto/habit-cli/issues/22",
-                  labels: {
-                    nodes: [],
-                  },
-                  repository: {
-                    name: "habit-cli",
-                    url: "https://github.com/evolvo-auto/habit-cli",
-                    owner: {
-                      login: "evolvo-auto",
-                    },
-                  },
-                },
+          id: "item-22",
+          fieldValueByName: {
+            name: "Inbox",
+            optionId: "opt-inbox",
+          },
+          content: {
+            id: "issue-node-22",
+            number: 22,
+            title: "Candidate issue",
+            body: "",
+            state: "OPEN",
+            url: "https://github.com/evolvo-auto/habit-cli/issues/22",
+            labels: {
+              nodes: [],
+            },
+            repository: {
+              name: "habit-cli",
+              url: "https://github.com/evolvo-auto/habit-cli",
+              owner: {
+                login: "evolvo-auto",
               },
-            ],
+            },
           },
         },
       });

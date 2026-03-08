@@ -55,7 +55,45 @@ export type ProjectBoardIssueItem = {
   };
   stage: ProjectWorkflowStage | null;
   stageOptionId: string | null;
- };
+};
+
+type GraphqlProjectItemNode = {
+  id?: string | null;
+  fieldValueByName?: {
+    name?: string | null;
+    optionId?: string | null;
+  } | null;
+  content?: {
+    id?: string | null;
+    number?: number | null;
+    title?: string | null;
+    body?: string | null;
+    state?: "OPEN" | "CLOSED" | null;
+    url?: string | null;
+    labels?: {
+      nodes?: Array<{ name?: string | null } | null> | null;
+    } | null;
+    repository?: {
+      name?: string | null;
+      url?: string | null;
+      owner?: {
+        login?: string | null;
+      } | null;
+    } | null;
+  } | null;
+};
+
+type GraphqlProjectItemsPage = {
+  node?: {
+    items?: {
+      nodes?: Array<GraphqlProjectItemNode | null> | null;
+      pageInfo?: {
+        endCursor?: string | null;
+        hasNextPage?: boolean | null;
+      } | null;
+    } | null;
+  } | null;
+};
 
 type ProjectStageOptionInput = {
   color: "BLUE" | "GRAY" | "GREEN" | "ORANGE" | "PINK" | "PURPLE" | "RED" | "YELLOW";
@@ -176,42 +214,16 @@ export class GitHubProjectsV2Client {
 
   public async listProjectIssueItems(project: ProjectRecord): Promise<ProjectBoardIssueItem[]> {
     const projectId = this.requireWorkflowMetadata(project, "boardId");
-    const data = await this.client.graphql<{
-      node?: {
-        items?: {
-          nodes?: Array<{
-            id?: string | null;
-            fieldValueByName?: {
-              name?: string | null;
-              optionId?: string | null;
-            } | null;
-            content?: {
-              id?: string | null;
-              number?: number | null;
-              title?: string | null;
-              body?: string | null;
-              state?: "OPEN" | "CLOSED" | null;
-              url?: string | null;
-              labels?: {
-                nodes?: Array<{ name?: string | null } | null> | null;
-              } | null;
-              repository?: {
-                name?: string | null;
-                url?: string | null;
-                owner?: {
-                  login?: string | null;
-                } | null;
-              } | null;
-            } | null;
-          } | null> | null;
-        } | null;
-      } | null;
-    }>(
-      `
-        query ListProjectIssueItems($projectId: ID!) {
+    const normalizedItems: ProjectBoardIssueItem[] = [];
+    let cursor: string | null = null;
+
+    while (true) {
+      const data: GraphqlProjectItemsPage = await this.client.graphql<GraphqlProjectItemsPage>(
+        `
+        query ListProjectIssueItems($projectId: ID!, $after: String) {
           node(id: $projectId) {
             ... on ProjectV2 {
-              items(first: 100) {
+              items(first: 100, after: $after) {
                 nodes {
                   id
                   fieldValueByName(name: "${STAGE_FIELD_NAME}") {
@@ -243,50 +255,28 @@ export class GitHubProjectsV2Client {
                     }
                   }
                 }
+                pageInfo {
+                  endCursor
+                  hasNextPage
+                }
               }
             }
           }
         }
       `,
-      { projectId },
-    );
+        { projectId, after: cursor },
+      );
 
-    const items = data.node?.items?.nodes ?? [];
-    const normalizedItems: ProjectBoardIssueItem[] = [];
-    for (const item of items) {
-      const itemId = item?.id?.trim();
-      const issueNodeId = item?.content?.id?.trim();
-      const issueNumber = typeof item?.content?.number === "number" ? item.content.number : null;
-      const title = item?.content?.title?.trim();
-      const url = item?.content?.url?.trim();
-      const repoName = item?.content?.repository?.name?.trim();
-      const repoOwner = item?.content?.repository?.owner?.login?.trim();
-      const repoUrl = item?.content?.repository?.url?.trim();
-      if (!itemId || !issueNodeId || issueNumber === null || !title || !url || !repoName || !repoOwner || !repoUrl) {
-        continue;
+      const items: Array<GraphqlProjectItemNode | null> = data.node?.items?.nodes ?? [];
+      normalizedItems.push(...items
+        .map((item: GraphqlProjectItemNode | null) => this.normalizeProjectBoardIssueItem(item))
+        .filter((item: ProjectBoardIssueItem | null): item is ProjectBoardIssueItem => item !== null));
+
+      const pageInfo: { endCursor?: string | null; hasNextPage?: boolean | null } | null = data.node?.items?.pageInfo ?? null;
+      if (!pageInfo?.hasNextPage || !pageInfo.endCursor) {
+        break;
       }
-
-      const stage = this.normalizeStageName(item?.fieldValueByName?.name);
-      normalizedItems.push({
-        itemId,
-        issueNodeId,
-        issueNumber,
-        title,
-        body: item?.content?.body ?? "",
-        state: item?.content?.state === "CLOSED" ? "CLOSED" : "OPEN",
-        url,
-        labels: (item?.content?.labels?.nodes ?? [])
-          .map((label) => label?.name?.trim() ?? "")
-          .filter((label) => label.length > 0),
-        repository: {
-          owner: repoOwner,
-          repo: repoName,
-          url: repoUrl,
-          reference: `${repoOwner}/${repoName}`,
-        },
-        stage,
-        stageOptionId: item?.fieldValueByName?.optionId?.trim() || null,
-      });
+      cursor = pageInfo.endCursor;
     }
 
     return normalizedItems;
@@ -305,7 +295,7 @@ export class GitHubProjectsV2Client {
       project.executionRepo.repo,
       issueNumber,
     );
-    await this.client.graphql<{
+    const addResult = await this.client.graphql<{
       addProjectV2ItemById?: {
         item?: {
           id?: string | null;
@@ -327,8 +317,10 @@ export class GitHubProjectsV2Client {
       },
     );
 
-    const refreshedItems = await this.listProjectIssueItems(project);
-    const addedItem = refreshedItems.find((item) => item.issueNumber === issueNumber);
+    const addedItemId = addResult.addProjectV2ItemById?.item?.id?.trim();
+    const addedItem = addedItemId
+      ? await this.getProjectIssueItemById(addedItemId)
+      : null;
     if (!addedItem) {
       throw new Error(`GitHub did not return board item metadata for issue #${issueNumber} in project ${project.slug}.`);
     }
@@ -550,6 +542,88 @@ export class GitHubProjectsV2Client {
     }
 
     return normalizedStageName as ProjectWorkflowStage;
+  }
+
+  private normalizeProjectBoardIssueItem(item: GraphqlProjectItemNode | null | undefined): ProjectBoardIssueItem | null {
+    const itemId = item?.id?.trim();
+    const issueNodeId = item?.content?.id?.trim();
+    const issueNumber = typeof item?.content?.number === "number" ? item.content.number : null;
+    const title = item?.content?.title?.trim();
+    const url = item?.content?.url?.trim();
+    const repoName = item?.content?.repository?.name?.trim();
+    const repoOwner = item?.content?.repository?.owner?.login?.trim();
+    const repoUrl = item?.content?.repository?.url?.trim();
+    if (!itemId || !issueNodeId || issueNumber === null || !title || !url || !repoName || !repoOwner || !repoUrl) {
+      return null;
+    }
+
+    return {
+      itemId,
+      issueNodeId,
+      issueNumber,
+      title,
+      body: item?.content?.body ?? "",
+      state: item?.content?.state === "CLOSED" ? "CLOSED" : "OPEN",
+      url,
+      labels: (item?.content?.labels?.nodes ?? [])
+        .map((label) => label?.name?.trim() ?? "")
+        .filter((label) => label.length > 0),
+      repository: {
+        owner: repoOwner,
+        repo: repoName,
+        url: repoUrl,
+        reference: `${repoOwner}/${repoName}`,
+      },
+      stage: this.normalizeStageName(item?.fieldValueByName?.name),
+      stageOptionId: item?.fieldValueByName?.optionId?.trim() || null,
+    };
+  }
+
+  private async getProjectIssueItemById(itemId: string): Promise<ProjectBoardIssueItem | null> {
+    const data = await this.client.graphql<{
+      node?: GraphqlProjectItemNode | null;
+    }>(
+      `
+        query GetProjectIssueItem($itemId: ID!) {
+          node(id: $itemId) {
+            ... on ProjectV2Item {
+              id
+              fieldValueByName(name: "${STAGE_FIELD_NAME}") {
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                  name
+                  optionId
+                }
+              }
+              content {
+                ... on Issue {
+                  id
+                  number
+                  title
+                  body
+                  state
+                  url
+                  labels(first: 50) {
+                    nodes {
+                      name
+                    }
+                  }
+                  repository {
+                    name
+                    url
+                    owner {
+                      login
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      { itemId },
+    );
+
+    return this.normalizeProjectBoardIssueItem(data.node ?? null);
   }
 
   private requireWorkflowMetadata(
