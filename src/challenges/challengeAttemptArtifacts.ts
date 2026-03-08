@@ -137,6 +137,29 @@ function getChallengeAttemptDirectory(workDir: string, challengeIssueNumber: num
   return join(workDir, EVOLVO_DIRECTORY_NAME, CHALLENGE_ATTEMPTS_DIRECTORY_NAME, String(challengeIssueNumber));
 }
 
+function buildChallengeAttemptArtifact(options: {
+  challengeIssueNumber: number;
+  attempt: number;
+  nowMs: number;
+  runResult: CodingAgentRunResult | null;
+  runError: unknown;
+}): ChallengeAttemptArtifact {
+  const success = options.runError === null &&
+    options.runResult !== null &&
+    options.runResult.summary.reviewOutcome === "accepted";
+
+  return {
+    schemaVersion: ARTIFACT_SCHEMA_VERSION,
+    challengeIssueNumber: options.challengeIssueNumber,
+    attempt: options.attempt,
+    attemptedAtMs: options.nowMs,
+    attemptedAtIso: new Date(options.nowMs).toISOString(),
+    outcome: success ? "success" : "failure",
+    executionSummary: buildExecutionSummary(options.runResult),
+    runtimeError: summarizeRuntimeError(options.runError),
+  };
+}
+
 async function getNextAttemptNumber(attemptDirectoryPath: string): Promise<number> {
   const entries = await fs.readdir(attemptDirectoryPath, { withFileTypes: true });
   const attempts = entries
@@ -166,22 +189,32 @@ export async function persistChallengeAttemptArtifact(
   const nowMs = toFiniteNonNegativeInteger(input.nowMs ?? Date.now());
   const attemptDirectoryPath = getChallengeAttemptDirectory(workDir, challengeIssueNumber);
   await fs.mkdir(attemptDirectoryPath, { recursive: true });
-  const attempt = await getNextAttemptNumber(attemptDirectoryPath);
-  const artifactFileName = formatAttemptFileName(attempt);
-  const relativePath = `${EVOLVO_DIRECTORY_NAME}/${CHALLENGE_ATTEMPTS_DIRECTORY_NAME}/${challengeIssueNumber}/${artifactFileName}`;
-  const absolutePath = join(attemptDirectoryPath, artifactFileName);
-  const success = input.runError === null && input.runResult !== null && input.runResult.summary.reviewOutcome === "accepted";
-  const artifact: ChallengeAttemptArtifact = {
-    schemaVersion: ARTIFACT_SCHEMA_VERSION,
-    challengeIssueNumber,
-    attempt,
-    attemptedAtMs: nowMs,
-    attemptedAtIso: new Date(nowMs).toISOString(),
-    outcome: success ? "success" : "failure",
-    executionSummary: buildExecutionSummary(input.runResult),
-    runtimeError: summarizeRuntimeError(input.runError),
-  };
+  let attempt = await getNextAttemptNumber(attemptDirectoryPath);
 
-  await fs.writeFile(absolutePath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
-  return { artifact, relativePath, absolutePath };
+  while (true) {
+    const artifactFileName = formatAttemptFileName(attempt);
+    const relativePath = `${EVOLVO_DIRECTORY_NAME}/${CHALLENGE_ATTEMPTS_DIRECTORY_NAME}/${challengeIssueNumber}/${artifactFileName}`;
+    const absolutePath = join(attemptDirectoryPath, artifactFileName);
+    const artifact = buildChallengeAttemptArtifact({
+      challengeIssueNumber,
+      attempt,
+      nowMs,
+      runResult: input.runResult,
+      runError: input.runError,
+    });
+
+    try {
+      await fs.writeFile(absolutePath, `${JSON.stringify(artifact, null, 2)}\n`, {
+        encoding: "utf8",
+        flag: "wx",
+      });
+      return { artifact, relativePath, absolutePath };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+
+      attempt += 1;
+    }
+  }
 }
