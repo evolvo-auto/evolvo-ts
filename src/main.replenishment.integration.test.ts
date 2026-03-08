@@ -18,7 +18,9 @@ const buildLifecycleStateCommentMock = vi.fn();
 const writeRuntimeReadinessSignalMock = vi.fn();
 const tryResolveRepositoryDefaultBranchMock = vi.fn();
 const ensureProjectRegistryMock = vi.fn();
+const readProjectRegistryMock = vi.fn();
 const readActiveProjectStateMock = vi.fn();
+const stopActiveProjectStateMock = vi.fn();
 const resolveProjectExecutionContextForIssueMock = vi.fn();
 const buildProjectRoutingBlockedCommentMock = vi.fn();
 
@@ -220,10 +222,14 @@ vi.mock("./projects/projectRegistry.js", () => ({
     defaultBranch: context.defaultBranch ?? null,
   }),
   ensureProjectRegistry: ensureProjectRegistryMock,
+  readProjectRegistry: readProjectRegistryMock,
+  findProjectBySlug: (registry: { projects: Array<{ slug: string }> }, slug: string) =>
+    registry.projects.find((project) => project.slug === slug) ?? null,
 }));
 
 vi.mock("./projects/activeProjectState.js", () => ({
   readActiveProjectState: readActiveProjectStateMock,
+  stopActiveProjectState: stopActiveProjectStateMock,
 }));
 
 vi.mock("./projects/projectExecutionContext.js", () => ({
@@ -414,13 +420,60 @@ describe("main replenishment integration", () => {
         },
       ],
     });
+    readProjectRegistryMock.mockReset();
+    readProjectRegistryMock.mockResolvedValue({
+      version: 1,
+      projects: [
+        {
+          slug: "evolvo",
+          displayName: "Evolvo",
+          kind: "default",
+          issueLabel: "project:evolvo",
+          trackerRepo: {
+            owner: "owner",
+            repo: "repo",
+            url: "https://github.com/owner/repo",
+          },
+          executionRepo: {
+            owner: "owner",
+            repo: "repo",
+            url: "https://github.com/owner/repo",
+            defaultBranch: "main",
+          },
+          cwd: "/tmp/evolvo",
+          status: "active",
+          sourceIssueNumber: null,
+          createdAt: "2026-03-07T12:00:00.000Z",
+          updatedAt: "2026-03-07T12:00:00.000Z",
+          provisioning: {
+            labelCreated: false,
+            repoCreated: true,
+            workspacePrepared: true,
+            lastError: null,
+          },
+        },
+      ],
+    });
     readActiveProjectStateMock.mockReset();
     readActiveProjectStateMock.mockResolvedValue({
-      version: 1,
+      version: 2,
       activeProjectSlug: null,
+      selectionState: null,
       updatedAt: null,
       requestedBy: null,
       source: null,
+    });
+    stopActiveProjectStateMock.mockReset();
+    stopActiveProjectStateMock.mockResolvedValue({
+      status: "no-active-project",
+      state: {
+        version: 2,
+        activeProjectSlug: null,
+        selectionState: null,
+        updatedAt: null,
+        requestedBy: null,
+        source: null,
+      },
     });
     resolveProjectExecutionContextForIssueMock.mockReset();
     resolveProjectExecutionContextForIssueMock.mockResolvedValue({

@@ -328,7 +328,7 @@ export async function writeDiscordControlCursor(workDir: string, lastSeenMessage
 export async function recordDiscordControlCommandReceipt(
   workDir: string,
   input: {
-    command: "start-project";
+    command: "start-project" | "stop-project";
     messageId: string;
     recordedAt?: string;
   },
