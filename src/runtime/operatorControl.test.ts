@@ -800,9 +800,20 @@ describe("operatorControl", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const onStartProject = vi.fn().mockResolvedValue({
       ok: true,
-      message: "Created issue #556.",
-      issueNumber: 556,
-      issueUrl: "https://github.com/evolvo-auto/evolvo-ts/issues/556",
+      action: "created",
+      message: "Created provisioning issue #556 for project `habit-cli`.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        workspacePath: "projects/habit-cli",
+        status: "provisioning",
+      },
+      trackerIssue: {
+        number: 556,
+        url: "https://github.com/evolvo-auto/evolvo-ts/issues/556",
+        alreadyOpen: false,
+      },
     });
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(
@@ -864,9 +875,20 @@ describe("operatorControl", () => {
 
     const onStartProject = vi.fn().mockResolvedValue({
       ok: true,
-      message: "Created issue #555.",
-      issueNumber: 555,
-      issueUrl: "https://github.com/evolvo-auto/evolvo-ts/issues/555",
+      action: "created",
+      message: "Created provisioning issue #555 for project `habit-cli`.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        workspacePath: "projects/habit-cli",
+        status: "provisioning",
+      },
+      trackerIssue: {
+        number: 555,
+        url: "https://github.com/evolvo-auto/evolvo-ts/issues/555",
+        alreadyOpen: false,
+      },
     });
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(
@@ -901,11 +923,66 @@ describe("operatorControl", () => {
         method: "POST",
         body: JSON.stringify({
           content: [
-            "<@operator-1> Project start request queued for `Habit CLI`.",
+            "<@operator-1> Created new project for `Habit CLI`.",
+            "Created provisioning issue #555 for project `habit-cli`.",
             "Tracker issue: #555 (https://github.com/evolvo-auto/evolvo-ts/issues/555)",
             "Planned label: `project:habit-cli`",
             "Planned repository: `habit-cli`",
             "Planned workspace: `projects/habit-cli`",
+          ].join("\n"),
+        }),
+      }),
+    );
+  });
+
+  it("acknowledges an authorized /startProject request by resuming an existing project", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const onStartProject = vi.fn().mockResolvedValue({
+      ok: true,
+      action: "resumed",
+      message: "Resumed existing project `habit-cli`.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        repositoryUrl: "https://github.com/evolvo-auto/habit-cli",
+        workspacePath: "/tmp/evolvo/projects/habit-cli",
+        status: "active",
+      },
+    });
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: "7150", content: "boot", author: { id: "someone" } }]), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ id: "7151", content: "/startProject Habit CLI", author: { id: "operator-1" } }]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-resume" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await pollDiscordGracefulShutdownCommand(workDir, { onStartProject });
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      "https://discord.com/api/v10/channels/channel-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: [
+            "<@operator-1> Resumed existing project `Habit CLI`.",
+            "Resumed existing project `habit-cli`.",
+            "Registry status: `active`",
+            "Execution repository: https://github.com/evolvo-auto/habit-cli",
+            "Workspace: `/tmp/evolvo/projects/habit-cli`",
           ].join("\n"),
         }),
       }),

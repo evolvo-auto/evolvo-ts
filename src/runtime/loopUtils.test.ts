@@ -83,4 +83,63 @@ describe("loopUtils retry handling", () => {
 
     expect(selected?.number).toBe(2);
   });
+
+  it("prefers issues for the active project when one is selected", () => {
+    const selected = selectIssueForWork(
+      [
+        {
+          number: 3,
+          title: "Default issue",
+          description: "default",
+          state: "open",
+          labels: [],
+        },
+        {
+          number: 4,
+          title: "Active project issue",
+          description: "managed",
+          state: "open",
+          labels: ["project:habit-cli"],
+        },
+      ],
+      { activeProjectSlug: "habit-cli" },
+    );
+
+    expect(selected?.number).toBe(4);
+  });
+
+  it("prefers the active project's provisioning issue while creation is still pending", () => {
+    const selected = selectIssueForWork(
+      [
+        {
+          number: 5,
+          title: "Default issue",
+          description: "default",
+          state: "open",
+          labels: [],
+        },
+        {
+          number: 6,
+          title: "Start project Habit CLI",
+          description: [
+            "<!-- evolvo:project-provisioning",
+            "owner: evolvo-auto",
+            "display_name: Habit CLI",
+            "slug: habit-cli",
+            "repo_name: habit-cli",
+            "issue_label: project:habit-cli",
+            "workspace_relative_path: projects/habit-cli",
+            "requested_by: discord:operator-1",
+            "requested_at: 2026-03-08T09:00:00.000Z",
+            "-->",
+          ].join("\n"),
+          state: "open",
+          labels: [],
+        },
+      ],
+      { activeProjectSlug: "habit-cli" },
+    );
+
+    expect(selected?.number).toBe(6);
+  });
 });

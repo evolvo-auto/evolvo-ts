@@ -40,9 +40,38 @@ export type StartProjectCommandRequest = {
 export type StartProjectCommandResult =
   | {
     ok: true;
+    action: "created";
     message: string;
-    issueNumber: number;
-    issueUrl: string;
+    project: {
+      displayName: string;
+      slug: string;
+      repositoryName: string;
+      workspacePath: string;
+      status: "provisioning";
+    };
+    trackerIssue: {
+      number: number;
+      url: string;
+      alreadyOpen: boolean;
+    };
+  }
+  | {
+    ok: true;
+    action: "resumed";
+    message: string;
+    project: {
+      displayName: string;
+      slug: string;
+      repositoryName: string;
+      repositoryUrl: string;
+      workspacePath: string;
+      status: "active" | "provisioning" | "failed";
+    };
+    trackerIssue?: {
+      number: number;
+      url: string;
+      alreadyOpen: boolean;
+    };
   }
   | {
     ok: false;
@@ -373,19 +402,31 @@ async function sendStartProjectAcknowledgement(
   request: StartProjectCommandRequest,
   result: StartProjectCommandResult,
 ): Promise<void> {
-  const content = result.ok
+  const content = !result.ok
     ? [
-      `<@${config.operatorUserId}> Project start request queued for \`${request.displayName}\`.`,
-      `Tracker issue: #${result.issueNumber} (${result.issueUrl})`,
-      `Planned label: \`${request.issueLabel}\``,
-      `Planned repository: \`${request.repositoryName}\``,
-      `Planned workspace: \`${request.workspaceRelativePath}\``,
-    ].join("\n")
-    : [
       `<@${config.operatorUserId}> Could not queue project start request for \`${request.displayName}\`.`,
       result.message,
       "Usage: `/startProject <project-name>`",
-    ].join("\n");
+    ].join("\n")
+    : result.action === "created"
+      ? [
+        `<@${config.operatorUserId}> ${result.trackerIssue.alreadyOpen ? "Project creation is already queued" : "Created new project"} for \`${result.project.displayName}\`.`,
+        result.message,
+        `Tracker issue: #${result.trackerIssue.number} (${result.trackerIssue.url})`,
+        `Planned label: \`project:${result.project.slug}\``,
+        `Planned repository: \`${result.project.repositoryName}\``,
+        `Planned workspace: \`${result.project.workspacePath}\``,
+      ].join("\n")
+      : [
+        `<@${config.operatorUserId}> Resumed existing project \`${result.project.displayName}\`.`,
+        result.message,
+        `Registry status: \`${result.project.status}\``,
+        `Execution repository: ${result.project.repositoryUrl}`,
+        `Workspace: \`${result.project.workspacePath}\``,
+        ...(result.trackerIssue
+          ? [`Recovery issue: #${result.trackerIssue.number} (${result.trackerIssue.url})`]
+          : []),
+      ].join("\n");
 
   await fetchDiscordJson<{ id: string }>(config, `/channels/${config.controlChannelId}/messages`, {
     method: "POST",

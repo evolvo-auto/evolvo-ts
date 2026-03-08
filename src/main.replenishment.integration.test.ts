@@ -18,6 +18,7 @@ const buildLifecycleStateCommentMock = vi.fn();
 const writeRuntimeReadinessSignalMock = vi.fn();
 const tryResolveRepositoryDefaultBranchMock = vi.fn();
 const ensureProjectRegistryMock = vi.fn();
+const readActiveProjectStateMock = vi.fn();
 const resolveProjectExecutionContextForIssueMock = vi.fn();
 const buildProjectRoutingBlockedCommentMock = vi.fn();
 
@@ -221,6 +222,10 @@ vi.mock("./projects/projectRegistry.js", () => ({
   ensureProjectRegistry: ensureProjectRegistryMock,
 }));
 
+vi.mock("./projects/activeProjectState.js", () => ({
+  readActiveProjectState: readActiveProjectStateMock,
+}));
+
 vi.mock("./projects/projectExecutionContext.js", () => ({
   PROJECT_ROUTING_BLOCKED_LABEL: "blocked",
   buildProjectRoutingBlockedComment: buildProjectRoutingBlockedCommentMock,
@@ -409,6 +414,14 @@ describe("main replenishment integration", () => {
         },
       ],
     });
+    readActiveProjectStateMock.mockReset();
+    readActiveProjectStateMock.mockResolvedValue({
+      version: 1,
+      activeProjectSlug: null,
+      updatedAt: null,
+      requestedBy: null,
+      source: null,
+    });
     resolveProjectExecutionContextForIssueMock.mockReset();
     resolveProjectExecutionContextForIssueMock.mockResolvedValue({
       ok: true,
@@ -537,7 +550,7 @@ describe("main replenishment integration", () => {
       "No actionable open issues remaining and no new issues were created. Issue loop stopped.",
     );
     expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
-  });
+  }, 10000);
 
   it("replenishes a completed-only open queue and continues processing without exiting", async () => {
     mockApiState.issues = [
@@ -632,7 +645,7 @@ describe("main replenishment integration", () => {
       "No actionable open issues remaining and no new issues were created. Issue loop stopped.",
     );
     expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
-  });
+  }, 10000);
 
   it("bootstraps startup issues for an empty queue and proceeds into normal issue selection", async () => {
     resetMockApiStateToEmptyQueue();

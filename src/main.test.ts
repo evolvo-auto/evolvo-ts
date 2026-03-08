@@ -39,9 +39,10 @@ const markGracefulShutdownRequestEnforcedMock = vi.fn();
 const tryResolveRepositoryDefaultBranchMock = vi.fn();
 const configureCodingAgentExecutionContextMock = vi.fn();
 const ensureProjectRegistryMock = vi.fn();
+const readActiveProjectStateMock = vi.fn();
 const resolveProjectExecutionContextForIssueMock = vi.fn();
 const buildProjectRoutingBlockedCommentMock = vi.fn();
-const createProjectProvisioningRequestIssueMock = vi.fn();
+const handleStartProjectCommandMock = vi.fn();
 const executeProjectProvisioningIssueMock = vi.fn();
 const isProjectProvisioningRequestIssueMock = vi.fn();
 const buildProjectProvisioningOutcomeCommentMock = vi.fn();
@@ -176,8 +177,8 @@ vi.mock("./runtime/operatorControl.js", () => ({
 vi.mock("./projects/projectProvisioning.js", () => ({
   buildProjectProvisioningCompletionSummary: buildProjectProvisioningCompletionSummaryMock,
   buildProjectProvisioningOutcomeComment: buildProjectProvisioningOutcomeCommentMock,
-  createProjectProvisioningRequestIssue: createProjectProvisioningRequestIssueMock,
   executeProjectProvisioningIssue: executeProjectProvisioningIssueMock,
+  handleStartProjectCommand: handleStartProjectCommandMock,
   isProjectProvisioningRequestIssue: isProjectProvisioningRequestIssueMock,
 }));
 
@@ -194,6 +195,10 @@ vi.mock("./projects/projectRegistry.js", () => ({
     defaultBranch: context.defaultBranch ?? null,
   }),
   ensureProjectRegistry: ensureProjectRegistryMock,
+}));
+
+vi.mock("./projects/activeProjectState.js", () => ({
+  readActiveProjectState: readActiveProjectStateMock,
 }));
 
 vi.mock("./projects/projectExecutionContext.js", () => ({
@@ -278,12 +283,23 @@ describe("main", () => {
     runPostMergeSelfRestartMock.mockResolvedValue(undefined);
     tryResolveRepositoryDefaultBranchMock.mockReset();
     tryResolveRepositoryDefaultBranchMock.mockResolvedValue("main");
-    createProjectProvisioningRequestIssueMock.mockReset();
-    createProjectProvisioningRequestIssueMock.mockResolvedValue({
+    handleStartProjectCommandMock.mockReset();
+    handleStartProjectCommandMock.mockResolvedValue({
       ok: true,
-      message: "Created issue #400.",
-      issueNumber: 400,
-      issueUrl: "https://github.com/owner/repo/issues/400",
+      action: "created",
+      message: "Created provisioning issue #400 for project `habit-cli`.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        workspacePath: "projects/habit-cli",
+        status: "provisioning",
+      },
+      trackerIssue: {
+        number: 400,
+        url: "https://github.com/owner/repo/issues/400",
+        alreadyOpen: false,
+      },
     });
     executeProjectProvisioningIssueMock.mockReset();
     executeProjectProvisioningIssueMock.mockResolvedValue({
@@ -337,6 +353,14 @@ describe("main", () => {
     buildProjectProvisioningCompletionSummaryMock.mockReturnValue("Provisioning complete summary");
     ensureProjectRegistryMock.mockReset();
     ensureProjectRegistryMock.mockResolvedValue({ version: 1, projects: [DEFAULT_PROJECT_EXECUTION_CONTEXT.project] });
+    readActiveProjectStateMock.mockReset();
+    readActiveProjectStateMock.mockResolvedValue({
+      version: 1,
+      activeProjectSlug: null,
+      updatedAt: null,
+      requestedBy: null,
+      source: null,
+    });
     resolveProjectExecutionContextForIssueMock.mockReset();
     resolveProjectExecutionContextForIssueMock.mockResolvedValue({
       ok: true,
@@ -523,6 +547,54 @@ describe("main", () => {
       }),
     );
     expect(stopDiscordGracefulShutdownListenerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes /startProject requests through the create-or-resume project handler", async () => {
+    const { main } = await import("./main.js");
+
+    await main();
+
+    const discordHandlers = startDiscordGracefulShutdownListenerMock.mock.calls[0]?.[1];
+    const result = await discordHandlers.onStartProject({
+      messageId: "7101",
+      requestedAt: "2026-03-08T09:00:00.000Z",
+      requestedBy: "discord:operator-1",
+      displayName: "Habit CLI",
+      slug: "habit-cli",
+      repositoryName: "habit-cli",
+      issueLabel: "project:habit-cli",
+      workspaceRelativePath: "projects/habit-cli",
+    });
+
+    expect(handleStartProjectCommandMock).toHaveBeenCalledWith({
+      issueManager: expect.any(Object),
+      workDir: "/tmp/evolvo",
+      trackerOwner: "owner",
+      trackerRepo: "repo",
+      projectName: "Habit CLI",
+      requestedBy: "discord:operator-1",
+      requestedAt: "2026-03-08T09:00:00.000Z",
+    });
+    expect(result).toEqual({
+      ok: true,
+      action: "created",
+      message: "Created provisioning issue #400 for project `habit-cli`.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        workspacePath: "projects/habit-cli",
+        status: "provisioning",
+      },
+      trackerIssue: {
+        number: 400,
+        url: "https://github.com/owner/repo/issues/400",
+        alreadyOpen: false,
+      },
+    });
+    expect(console.log).toHaveBeenCalledWith(
+      "[startProject] created new project flow for Habit CLI (habit-cli).",
+    );
   });
 
   it("logs and excludes unauthorized issues before normal selection", async () => {
@@ -772,6 +844,49 @@ describe("main", () => {
       expect.stringContaining("Execution repository: `owner/habit-cli`."),
     );
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #14: Managed repo issue\n\nUse project context");
+  });
+
+  it("prefers issues for the active project when one is selected", async () => {
+    readActiveProjectStateMock.mockResolvedValueOnce({
+      version: 1,
+      activeProjectSlug: "habit-cli",
+      updatedAt: "2026-03-08T09:10:00.000Z",
+      requestedBy: "discord:operator-1",
+      source: "start-project-command",
+    });
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        { number: 21, title: "Default issue", description: "general", state: "open", labels: [] },
+        { number: 22, title: "Managed issue", description: "project", state: "open", labels: ["project:habit-cli"] },
+      ])
+      .mockResolvedValueOnce([]);
+    resolveProjectExecutionContextForIssueMock.mockResolvedValueOnce({
+      ok: true,
+      context: {
+        project: {
+          ...DEFAULT_PROJECT_EXECUTION_CONTEXT.project,
+          slug: "habit-cli",
+          displayName: "Habit CLI",
+          kind: "managed",
+          issueLabel: "project:habit-cli",
+          executionRepo: {
+            owner: "owner",
+            repo: "habit-cli",
+            url: "https://github.com/owner/habit-cli",
+            defaultBranch: "main",
+          },
+          cwd: "/tmp/evolvo/projects/habit-cli",
+        },
+        trackerRepository: "owner/repo",
+        executionRepository: "owner/habit-cli",
+      },
+    });
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(markInProgressMock).toHaveBeenCalledWith(22);
+    expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #22: Managed issue\n\nproject");
   });
 
   it("blocks issues with invalid project labels before execution", async () => {
