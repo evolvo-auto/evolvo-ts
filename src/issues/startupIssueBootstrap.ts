@@ -11,6 +11,20 @@ export type IssueTemplate = {
 type PackageJsonShape = {
   scripts?: Record<string, string>;
 };
+
+type PackageJsonReadResult =
+  | {
+    status: "ok";
+    packageJson: PackageJsonShape;
+  }
+  | {
+    status: "missing";
+  }
+  | {
+    status: "malformed" | "unreadable";
+    errorMessage: string;
+  };
+
 const IGNORED_SCAN_DIRECTORIES = new Set([".git", "node_modules", "dist", "build", "coverage", ".turbo"]);
 const execFileAsync = promisify(execFile);
 
@@ -23,18 +37,61 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-async function readPackageJson(repoRoot: string): Promise<PackageJsonShape> {
+async function readPackageJson(repoRoot: string): Promise<PackageJsonReadResult> {
   try {
     const raw = await fs.readFile(join(repoRoot, "package.json"), "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (typeof parsed === "object" && parsed !== null) {
-      return parsed as PackageJsonShape;
+      return {
+        status: "ok",
+        packageJson: parsed as PackageJsonShape,
+      };
     }
 
-    return {};
-  } catch {
-    return {};
+    return {
+      status: "malformed",
+      errorMessage: "package.json must contain a JSON object at the top level.",
+    };
+  } catch (error) {
+    const errorCode = (error as NodeJS.ErrnoException).code;
+    if (errorCode === "ENOENT") {
+      return {
+        status: "missing",
+      };
+    }
+
+    if (error instanceof SyntaxError) {
+      return {
+        status: "malformed",
+        errorMessage: error.message,
+      };
+    }
+
+    return {
+      status: "unreadable",
+      errorMessage: error instanceof Error ? error.message : "unknown package.json read error",
+    };
   }
+}
+
+function buildPackageJsonBootstrapTemplate(result: Extract<PackageJsonReadResult, {
+  status: "malformed" | "unreadable";
+}>): IssueTemplate {
+  if (result.status === "malformed") {
+    return {
+      title: "Repair malformed package.json metadata",
+      description:
+        "Fix `package.json` so startup bootstrap can read repository scripts and metadata reliably. Current parse error: " +
+        `\`${result.errorMessage}\`. Until this is fixed, bootstrap planning cannot trust package-based signals.`,
+    };
+  }
+
+  return {
+    title: "Restore readable package.json metadata",
+    description:
+      "Fix repository access to `package.json` so startup bootstrap can inspect scripts and metadata reliably. Current read error: " +
+      `\`${result.errorMessage}\`. Until this is fixed, bootstrap planning cannot trust package-based signals.`,
+  };
 }
 
 async function listTypeScriptFiles(root: string): Promise<string[]> {
@@ -100,7 +157,11 @@ export async function generateStartupIssueTemplates(
   }
 
   const packageJson = await readPackageJson(repoRoot);
-  const scripts = packageJson.scripts ?? {};
+  if (packageJson.status === "malformed" || packageJson.status === "unreadable") {
+    return [buildPackageJsonBootstrapTemplate(packageJson)].slice(0, targetCount);
+  }
+
+  const scripts = packageJson.status === "ok" ? packageJson.packageJson.scripts ?? {} : {};
   const templates: IssueTemplate[] = [];
 
   if (!scripts.typecheck) {

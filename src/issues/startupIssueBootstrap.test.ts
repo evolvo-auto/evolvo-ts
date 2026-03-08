@@ -153,4 +153,20 @@ describe("generateStartupIssueTemplates", () => {
     const templates = await generateStartupIssueTemplates(repoRoot, { targetCount: 3 });
     expect(templates.map((template) => template.title)).toEqual(["Add regression tests for src/tracked.ts"]);
   });
+
+  it("surfaces malformed package.json as a targeted bootstrap issue instead of generic defaults", async () => {
+    const repoRoot = await createTempRepo();
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    await writeFile(join(repoRoot, "package.json"), "{not-json", "utf8");
+    await writeFile(join(repoRoot, "src", "index.ts"), "export const value = 1;\n");
+
+    const templates = await generateStartupIssueTemplates(repoRoot, { targetCount: 3 });
+
+    expect(templates).toEqual([
+      {
+        title: "Repair malformed package.json metadata",
+        description: expect.stringContaining("bootstrap planning cannot trust package-based signals"),
+      },
+    ]);
+  });
 });
