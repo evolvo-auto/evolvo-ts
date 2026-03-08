@@ -22,13 +22,18 @@ import type { TaskIssueManager } from "../issues/taskIssueManager.js";
 import { getWorkflowWorkItemRecord, upsertWorkflowWorkItemRecord } from "./workflowWorkItemState.js";
 import { readWorkflowAgentState, updateWorkflowAgentState } from "./workflowAgentState.js";
 
+export const IDEA_STAGE_TARGET_PER_PROJECT = 5;
 const ISSUE_GENERATOR_MAX_ISSUES_PER_PROJECT = 5;
 const PLANNER_MAX_ISSUES_PER_PROJECT = 10;
+export const PLANNING_LIMIT_PER_PROJECT = 5;
+export const READY_FOR_DEV_LIMIT_PER_PROJECT = 3;
+export const IN_DEV_LIMIT_PER_PROJECT = 1;
 
 export type WorkflowSchedulerCycleResult = {
   inventory: StagedWorkInventory;
   summary: {
     issueGeneratorCreated: number;
+    plannerMovedToPlanning: number;
     plannerMovedToReadyForDev: number;
     plannerBlocked: number;
     devStarted: number;
@@ -94,7 +99,15 @@ async function runIssueGeneratorPass(options: {
     }
 
     const backlogCount = projectInventory.countsByStage.Inbox + projectInventory.countsByStage.Planning;
-    if (backlogCount >= 2) {
+    if (backlogCount >= IDEA_STAGE_TARGET_PER_PROJECT) {
+      continue;
+    }
+
+    const issuesNeeded = Math.min(
+      ISSUE_GENERATOR_MAX_ISSUES_PER_PROJECT,
+      IDEA_STAGE_TARGET_PER_PROJECT - backlogCount,
+    );
+    if (issuesNeeded <= 0) {
       continue;
     }
 
@@ -114,10 +127,10 @@ async function runIssueGeneratorPass(options: {
       },
       openIssueTitles: openIssues.map((issue) => issue.title),
       recentClosedIssueTitles: recentClosedIssues.map((issue) => issue.title),
-      maxIssues: ISSUE_GENERATOR_MAX_ISSUES_PER_PROJECT,
+      maxIssues: issuesNeeded,
     });
 
-    for (const draft of drafts.slice(0, ISSUE_GENERATOR_MAX_ISSUES_PER_PROJECT)) {
+    for (const draft of drafts.slice(0, issuesNeeded)) {
       const created = await issueManager.createIssue(draft.title, draft.description);
       if (!created.ok || !created.issue) {
         continue;
@@ -138,7 +151,8 @@ async function runPlannerPass(options: {
   trackerIssueManager: TaskIssueManager;
   boardsClient: GitHubProjectsV2Client;
   workDir: string;
-}): Promise<{ movedToReadyForDev: number; blocked: number }> {
+}): Promise<{ movedToPlanning: number; movedToReadyForDev: number; blocked: number }> {
+  let movedToPlanning = 0;
   let movedToReadyForDev = 0;
   let blocked = 0;
 
@@ -146,6 +160,15 @@ async function runPlannerPass(options: {
     if (!isActiveProject(projectInventory)) {
       continue;
     }
+
+    let remainingPlanningCapacity = Math.max(
+      0,
+      PLANNING_LIMIT_PER_PROJECT - projectInventory.countsByStage.Planning,
+    );
+    let remainingReadyForDevCapacity = Math.max(
+      0,
+      READY_FOR_DEV_LIMIT_PER_PROJECT - projectInventory.countsByStage["Ready for Dev"],
+    );
 
     const planningItems = projectInventory.items
       .filter((item) => item.stage === "Inbox" || item.stage === "Planning")
@@ -192,11 +215,43 @@ async function runPlannerPass(options: {
         }
 
         const splitBoardItem = await options.boardsClient.ensureRepositoryIssueItem(projectInventory.project, created.issue.number);
-        await options.boardsClient.moveProjectItemToStage(projectInventory.project, splitBoardItem.itemId, "Inbox");
-        logAgent(projectInventory.project, "planner", `split #${action.issueNumber} into new Inbox issue #${created.issue.number}.`);
+        await options.boardsClient.moveProjectItemToStage(projectInventory.project, splitBoardItem.itemId, "Planning");
+        movedToPlanning += 1;
+        logAgent(projectInventory.project, "planner", `split #${action.issueNumber} into new Planning issue #${created.issue.number}.`);
       }
 
-      if (action.decision === "ready-for-dev") {
+      if (action.decision === "planning" || boardItem.stage === "Inbox") {
+        if (boardItem.stage === "Inbox" && remainingPlanningCapacity <= 0) {
+          logAgent(
+            projectInventory.project,
+            "planner",
+            `kept #${action.issueNumber} in Inbox because Planning is at capacity (${PLANNING_LIMIT_PER_PROJECT}).`,
+          );
+        } else if (boardItem.stage === "Inbox") {
+          await options.boardsClient.moveProjectItemToStage(projectInventory.project, boardItem.boardItemId, "Planning");
+          await recordProjectStageTransition({
+            workDir: options.workDir,
+            slug: projectInventory.project.slug,
+            from: boardItem.stage,
+            to: "Planning",
+            reason: action.reasons.join("; "),
+          });
+          remainingPlanningCapacity -= 1;
+          movedToPlanning += 1;
+          logAgent(projectInventory.project, "planner", `planned #${action.issueNumber} and moved it to Planning.`);
+        } else {
+          logAgent(projectInventory.project, "planner", `refined #${action.issueNumber} in Planning.`);
+        }
+      } else if (action.decision === "ready-for-dev") {
+        if (remainingReadyForDevCapacity <= 0) {
+          logAgent(
+            projectInventory.project,
+            "planner",
+            `kept #${action.issueNumber} in ${boardItem.stage} because Ready for Dev is at capacity (${READY_FOR_DEV_LIMIT_PER_PROJECT}).`,
+          );
+          continue;
+        }
+
         await options.boardsClient.moveProjectItemToStage(projectInventory.project, boardItem.boardItemId, "Ready for Dev");
         await recordProjectStageTransition({
           workDir: options.workDir,
@@ -205,6 +260,7 @@ async function runPlannerPass(options: {
           to: "Ready for Dev",
           reason: action.reasons.join("; "),
         });
+        remainingReadyForDevCapacity -= 1;
         movedToReadyForDev += 1;
         logAgent(projectInventory.project, "planner", `moved #${action.issueNumber} to Ready for Dev.`);
       } else {
@@ -226,7 +282,7 @@ async function runPlannerPass(options: {
     }
   }
 
-  return { movedToReadyForDev, blocked };
+  return { movedToPlanning, movedToReadyForDev, blocked };
 }
 
 async function runReviewPass(options: {
@@ -376,7 +432,8 @@ async function runDevPass(options: {
 }): Promise<number> {
   const runnableProjects = options.inventory.projects
     .filter((projectInventory) => isActiveProject(projectInventory))
-    .filter((projectInventory) => projectInventory.activity?.currentCodingLease === null || projectInventory.project.slug === "evolvo");
+    .filter((projectInventory) => projectInventory.activity?.currentCodingLease === null)
+    .filter((projectInventory) => projectInventory.countsByStage["In Dev"] < IN_DEV_LIMIT_PER_PROJECT);
 
   const results: number[] = await Promise.all(runnableProjects.map(async (projectInventory) => {
     const readyItem = projectInventory.items
@@ -533,7 +590,7 @@ export async function runWorkflowSchedulerCycle(options: {
     boardsClient: options.boardsClient,
     workDir: options.workDir,
   });
-  if (plannerSummary.movedToReadyForDev > 0 || plannerSummary.blocked > 0) {
+  if (plannerSummary.movedToPlanning > 0 || plannerSummary.movedToReadyForDev > 0 || plannerSummary.blocked > 0) {
     inventory = await buildStagedWorkInventory({
       workDir: options.workDir,
       defaultProject: options.defaultProject,
@@ -597,6 +654,7 @@ export async function runWorkflowSchedulerCycle(options: {
     inventory,
     summary: {
       issueGeneratorCreated,
+      plannerMovedToPlanning: plannerSummary.movedToPlanning,
       plannerMovedToReadyForDev: plannerSummary.movedToReadyForDev,
       plannerBlocked: plannerSummary.blocked,
       devStarted,
