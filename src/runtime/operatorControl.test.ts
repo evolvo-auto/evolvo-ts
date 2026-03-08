@@ -660,6 +660,89 @@ describe("operatorControl", () => {
     );
   });
 
+  it("retries Discord rate-limit responses after the advertised Retry-After delay", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "You are being rate limited." }), {
+          status: 429,
+          headers: {
+            "retry-after": "2",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "quit-after-retry" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const notificationPromise = notifyRuntimeQuittingInDiscord("Retry test");
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await notificationPromise;
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries transient Discord network errors and succeeds", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const fetchSpy = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Network request failed"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "quit-network-retry" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const notificationPromise = notifyRuntimeQuittingInDiscord("Network retry");
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await notificationPromise;
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries Discord request timeouts and logs the explicit timeout when retries are exhausted", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const abortError = new Error("aborted");
+    abortError.name = "AbortError";
+
+    const fetchSpy = vi.fn().mockRejectedValue(abortError);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const notificationPromise = notifyRuntimeQuittingInDiscord("Timeout retry");
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(500);
+    await notificationPromise;
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Discord runtime quit notification failed: [send-quit-message] Discord API request timed out after 10000ms.",
+      ),
+    );
+  });
+
   it("records and acknowledges an authorized quit after current task graceful shutdown command", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
@@ -947,6 +1030,7 @@ describe("operatorControl", () => {
           { status: 200 },
         ),
       )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-replayed-quit" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-replayed-start-project" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);
 

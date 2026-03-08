@@ -117,6 +117,10 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 5 * 1000;
 const DEFAULT_CYCLE_EXTENSION = 25;
 const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
+const DISCORD_RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+const DISCORD_REQUEST_TIMEOUT_MS = 10_000;
+const DISCORD_REQUEST_MAX_RETRIES = 2;
+const DISCORD_RETRY_BASE_DELAY_MS = 250;
 
 type DiscordOperatorStep =
   | "verify-channel"
@@ -322,24 +326,177 @@ function buildIssueStartIssueUrl(notification: DiscordIssueStartNotification): s
   return `https://github.com/${trackerRepository}/issues/${notification.issue.number}`;
 }
 
+class DiscordApiError extends Error {
+  public readonly status: number;
+  public readonly responseBody: unknown;
+  public readonly responseHeaders: Headers | null;
+
+  public constructor(message: string, status: number, responseBody: unknown, responseHeaders?: Headers | null) {
+    super(message);
+    this.name = "DiscordApiError";
+    this.status = status;
+    this.responseBody = responseBody;
+    this.responseHeaders = responseHeaders ?? null;
+  }
+}
+
+async function fetchDiscordWithTimeout(
+  config: DiscordControlConfig,
+  path: string,
+  options: RequestInit,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DISCORD_REQUEST_TIMEOUT_MS);
+
+  try {
+    return await fetch(`${DISCORD_API_BASE_URL}${path}`, {
+      ...options,
+      headers: {
+        ...buildAuthHeaders(config),
+        ...(options.headers ?? {}),
+      },
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (isDiscordAbortError(error)) {
+      throw new Error(`Discord API request timed out after ${DISCORD_REQUEST_TIMEOUT_MS}ms.`);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function readDiscordResponseBody(response: Response): Promise<unknown> {
+  if (response.status === 204) {
+    return null;
+  }
+
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function buildDiscordApiErrorMessage(responseBody: unknown, status: number): string {
+  if (responseBody !== null && typeof responseBody === "object" && "message" in responseBody) {
+    const message = (responseBody as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) {
+      return `Discord API request failed (${status}): ${message}`;
+    }
+  }
+
+  if (typeof responseBody === "string" && responseBody.trim()) {
+    return `Discord API request failed (${status}): ${responseBody}`;
+  }
+
+  return `Discord API request failed with status ${status}.`;
+}
+
+function isDiscordRetryableError(error: unknown): boolean {
+  if (error instanceof DiscordApiError) {
+    return DISCORD_RETRYABLE_STATUS_CODES.has(error.status);
+  }
+
+  if (error instanceof Error) {
+    if (error.message.startsWith("Discord API request timed out")) {
+      return true;
+    }
+
+    return error instanceof TypeError;
+  }
+
+  return false;
+}
+
+function isDiscordAbortError(error: unknown): boolean {
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    return error.name === "AbortError";
+  }
+
+  if (error instanceof Error) {
+    return error.name === "AbortError";
+  }
+
+  return false;
+}
+
+async function waitBeforeDiscordRetry(delayMs: number): Promise<void> {
+  const normalizedDelayMs = Math.max(0, Math.floor(delayMs));
+  await new Promise((resolve) => {
+    setTimeout(resolve, normalizedDelayMs);
+  });
+}
+
+function getDiscordRetryDelayMs(attempt: number, error: unknown): number {
+  const attemptDelayMs = DISCORD_RETRY_BASE_DELAY_MS * attempt;
+  if (!(error instanceof DiscordApiError)) {
+    return attemptDelayMs;
+  }
+
+  const retryAfterDelayMs = parseDiscordRetryAfterDelayMs(error.responseHeaders);
+  return Math.max(attemptDelayMs, retryAfterDelayMs);
+}
+
+function parseDiscordRetryAfterDelayMs(headers: Headers | null): number {
+  const rawValue = headers?.get("retry-after")?.trim();
+  if (!rawValue) {
+    return 0;
+  }
+
+  const seconds = Number(rawValue);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds * 1000);
+  }
+
+  const parsedDateMs = Date.parse(rawValue);
+  if (Number.isNaN(parsedDateMs)) {
+    return 0;
+  }
+
+  return Math.max(0, parsedDateMs - Date.now());
+}
+
 async function fetchDiscordJson<T>(
   config: DiscordControlConfig,
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(`${DISCORD_API_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...buildAuthHeaders(config),
-      ...(options.headers ?? {}),
-    },
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Discord API request failed (${response.status}): ${body || response.statusText}`);
+  const totalAttempts = DISCORD_REQUEST_MAX_RETRIES + 1;
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    try {
+      const response = await fetchDiscordWithTimeout(config, path, options);
+      const responseBody = await readDiscordResponseBody(response);
+
+      if (!response.ok) {
+        throw new DiscordApiError(
+          buildDiscordApiErrorMessage(responseBody, response.status),
+          response.status,
+          responseBody,
+          response.headers,
+        );
+      }
+
+      return responseBody as T;
+    } catch (error) {
+      const shouldRetry = attempt < totalAttempts && isDiscordRetryableError(error);
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      await waitBeforeDiscordRetry(getDiscordRetryDelayMs(attempt, error));
+    }
   }
 
-  return response.json() as Promise<T>;
+  throw new Error("Unexpected Discord request flow.");
 }
 
 async function sendCycleLimitPrompt(
