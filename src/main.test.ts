@@ -844,6 +844,72 @@ describe("main", () => {
     );
   });
 
+  it("reports live self-work status while an issue is executing", async () => {
+    let resolveRun: (value: typeof DEFAULT_RUN_RESULT) => void = () => undefined;
+    const pendingRun = new Promise<typeof DEFAULT_RUN_RESULT>((resolve) => {
+      resolveRun = resolve;
+    });
+    runCodingAgentMock.mockImplementation(() => pendingRun);
+    listOpenIssuesMock
+      .mockResolvedValueOnce([
+        {
+          number: 403,
+          title: "Add status command",
+          description: "Expose runtime status in Discord.",
+          state: "open",
+          labels: [],
+        },
+      ])
+      .mockResolvedValue([]);
+    const { main } = await import("./main.js");
+
+    const mainPromise = main();
+    while (startDiscordGracefulShutdownListenerMock.mock.calls.length === 0) {
+      await Promise.resolve();
+    }
+    while (runCodingAgentMock.mock.calls.length === 0) {
+      await Promise.resolve();
+    }
+
+    const discordHandlers = startDiscordGracefulShutdownListenerMock.mock.calls[0]?.[1];
+    try {
+      const status = await discordHandlers.onStatus({
+        messageId: "7300",
+        requestedAt: "2026-03-08T11:00:00.000Z",
+        requestedBy: "discord:operator-1",
+      });
+
+      expect(status).toEqual({
+        ok: true,
+        snapshot: {
+          online: true,
+          runtimeState: "active",
+          workMode: "self-work",
+          activitySummary: "Executing issue #403.",
+          activeProject: null,
+          activeIssue: {
+            number: 403,
+            title: "Add status command",
+            repository: "owner/repo",
+            lifecycleState: "selected -> executing",
+          },
+          deferredStop: null,
+          cycle: {
+            current: 1,
+            limit: 10,
+            remaining: 9,
+          },
+        },
+      });
+      expect(console.log).toHaveBeenCalledWith(
+        "[status] served runtime status to discord:operator-1: state=active mode=self-work project=none issue=403",
+      );
+    } finally {
+      resolveRun(DEFAULT_RUN_RESULT);
+      await mainPromise;
+    }
+  });
+
   it("logs and excludes unauthorized issues before normal selection", async () => {
     listOpenIssuesMock.mockResolvedValueOnce([]);
     unauthorizedIssueClosuresMock.mockResolvedValueOnce([

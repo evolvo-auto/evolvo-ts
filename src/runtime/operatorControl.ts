@@ -18,6 +18,7 @@ import {
 import type { IssueSummary } from "../issues/taskIssueManager.js";
 import type { ProjectExecutionContext } from "../projects/projectExecutionContext.js";
 import { normalizeProjectNameInput } from "../projects/projectNaming.js";
+import type { RuntimeStatusSnapshot } from "./runtimeStatus.js";
 
 type DiscordControlConfig = {
   botToken: string;
@@ -51,6 +52,12 @@ export type StopProjectCommandRequest = {
   requestedAt: string;
   requestedBy: string;
   mode: "now" | "when-project-complete";
+};
+
+export type StatusCommandRequest = {
+  messageId: string;
+  requestedAt: string;
+  requestedBy: string;
 };
 
 export type StartProjectCommandResult =
@@ -114,9 +121,20 @@ export type StopProjectCommandResult =
     message: string;
   };
 
+export type StatusCommandResult =
+  | {
+    ok: true;
+    snapshot: RuntimeStatusSnapshot;
+  }
+  | {
+    ok: false;
+    message: string;
+  };
+
 export type DiscordControlHandlers = {
   onStartProject?: (request: StartProjectCommandRequest) => Promise<StartProjectCommandResult>;
   onStopProject?: (request: StopProjectCommandRequest) => Promise<StopProjectCommandResult>;
+  onStatus?: (request: StatusCommandRequest) => Promise<StatusCommandResult>;
 };
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -138,6 +156,7 @@ type DiscordOperatorStep =
   | "read-control-commands"
   | "send-quit-ack"
   | "send-stop-project-ack"
+  | "send-status-ack"
   | "send-project-return-ack"
   | "send-start-project-ack"
   | "send-cycle-decision-ack"
@@ -177,7 +196,7 @@ type DiscordControlMessage = {
   author?: { id?: string };
 };
 
-type DiscordSlashCommandName = "quit" | "startproject" | "stopproject";
+type DiscordSlashCommandName = "quit" | "startproject" | "stopproject" | "status";
 
 type DiscordSlashCommandResult = {
   gracefulShutdownRequest: GracefulShutdownRequest | null;
@@ -192,6 +211,7 @@ const DISCORD_SLASH_COMMAND_NAMES = {
   quit: "quit",
   startProject: "startproject",
   stopProject: "stopproject",
+  status: "status",
 } satisfies Record<string, DiscordSlashCommandName>;
 
 function getRequiredTrimmedEnv(name: string, env: NodeJS.ProcessEnv): string | null {
@@ -295,6 +315,10 @@ function parseStopProjectCommand(content: string): string | null {
   }
 
   return match[1]?.trim() ?? "";
+}
+
+function parseStatusCommand(content: string): boolean {
+  return content.trim().toLowerCase() === "status";
 }
 
 function parseStopProjectModeFromSuffix(
@@ -563,8 +587,8 @@ function buildStartupBootMessageContent(): string {
   return [
     "🤖 Evolvo runtime booted.",
     "Operator control is online in plain-text mode, and the live bot session will register slash commands when it connects.",
-    "Slash commands: `/quit`, `/startproject`, `/stopproject mode:now|when-project-complete`.",
-    "Plain-text fallback: `quit after current task`, `quit after tasks`, `startProject <project-name>`, `stopProject`, `stopProject whenProjectComplete`.",
+    "Slash commands: `/status`, `/quit`, `/startproject`, `/stopproject mode:now|when-project-complete`.",
+    "Plain-text fallback: `status`, `quit after current task`, `quit after tasks`, `startProject <project-name>`, `stopProject`, `stopProject whenProjectComplete`.",
     "When Evolvo posts a cycle-limit prompt, reply with `continue` or `quit`.",
     `Started at: ${startedAt}`,
   ].join("\n");
@@ -794,6 +818,97 @@ async function sendStopProjectAcknowledgement(
   });
 }
 
+function formatStatusProjectLine(snapshot: RuntimeStatusSnapshot): string {
+  if (snapshot.activeProject === null) {
+    return "Project: none";
+  }
+
+  const repositorySuffix = snapshot.activeProject.repository
+    ? ` | repo: \`${snapshot.activeProject.repository}\``
+    : "";
+  return `Project: ${snapshot.activeProject.displayName} (\`${snapshot.activeProject.slug}\`)${repositorySuffix}`;
+}
+
+function formatStatusIssueLine(snapshot: RuntimeStatusSnapshot): string {
+  if (snapshot.activeIssue === null) {
+    return "Issue: none";
+  }
+
+  const repositorySuffix = snapshot.activeIssue.repository
+    ? ` | repo: \`${snapshot.activeIssue.repository}\``
+    : "";
+  return `Issue: #${snapshot.activeIssue.number} ${snapshot.activeIssue.title}${repositorySuffix}`;
+}
+
+function formatStatusLifecycleLine(snapshot: RuntimeStatusSnapshot): string {
+  if (snapshot.activeIssue === null) {
+    return "Lifecycle: none";
+  }
+
+  return `Lifecycle: ${snapshot.activeIssue.lifecycleState ?? "unknown"}`;
+}
+
+function formatStatusDeferredStopLine(snapshot: RuntimeStatusSnapshot): string {
+  if (snapshot.deferredStop !== "when-project-complete") {
+    return "Deferred stop: none";
+  }
+
+  return "Deferred stop: current project will stop when complete, then Evolvo will return to self-work.";
+}
+
+function formatStatusCycleLine(snapshot: RuntimeStatusSnapshot): string {
+  if (snapshot.cycle === null) {
+    return "Cycle: unavailable";
+  }
+
+  if (snapshot.cycle.current !== null && snapshot.cycle.limit !== null) {
+    return `Cycle: ${snapshot.cycle.current} of ${snapshot.cycle.limit} (${snapshot.cycle.remaining ?? "unknown"} remaining after this cycle)`;
+  }
+
+  if (snapshot.cycle.limit !== null) {
+    return `Cycle: not started yet (${snapshot.cycle.limit} total budget available)`;
+  }
+
+  return `Cycle: ${snapshot.cycle.current ?? "unknown"} (limit unavailable)`;
+}
+
+function buildStatusAcknowledgementContent(
+  operatorUserId: string,
+  result: StatusCommandResult,
+): string {
+  if (!result.ok) {
+    return [
+      `<@${operatorUserId}> Could not read the current Evolvo status.`,
+      result.message,
+    ].join("\n");
+  }
+
+  const snapshot = result.snapshot;
+  return [
+    `<@${operatorUserId}> Evolvo is online.`,
+    `Runtime state: \`${snapshot.runtimeState}\``,
+    `Work mode: \`${snapshot.workMode}\``,
+    `Activity: ${snapshot.activitySummary ?? "unavailable"}`,
+    formatStatusProjectLine(snapshot),
+    formatStatusIssueLine(snapshot),
+    formatStatusLifecycleLine(snapshot),
+    formatStatusDeferredStopLine(snapshot),
+    formatStatusCycleLine(snapshot),
+  ].join("\n");
+}
+
+async function sendStatusAcknowledgement(
+  config: DiscordControlConfig,
+  result: StatusCommandResult,
+): Promise<void> {
+  await fetchDiscordJson<{ id: string }>(config, `/channels/${config.controlChannelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      content: buildStatusAcknowledgementContent(config.operatorUserId, result),
+    }),
+  });
+}
+
 export async function notifyDeferredProjectStopTriggeredInDiscord(project: {
   displayName: string;
   slug: string;
@@ -859,6 +974,10 @@ async function sendRuntimeQuitNotification(
 
 function buildDiscordSlashCommandDefinitions(): RESTPostAPIChatInputApplicationCommandsJSONBody[] {
   return [
+    {
+      name: DISCORD_SLASH_COMMAND_NAMES.status,
+      description: "Show the current Evolvo runtime and work status",
+    },
     {
       name: DISCORD_SLASH_COMMAND_NAMES.quit,
       description: "Request a graceful Evolvo shutdown",
@@ -1081,9 +1200,33 @@ async function processStopProjectControlCommand(
   }
 }
 
+async function processStatusControlCommand(
+  messageId: string,
+  requestedBy: string,
+  handlers: DiscordControlHandlers,
+): Promise<StatusCommandResult> {
+  try {
+    if (!handlers.onStatus) {
+      throw new Error("Status commands are not available in this runtime.");
+    }
+
+    return await handlers.onStatus({
+      messageId,
+      requestedAt: new Date().toISOString(),
+      requestedBy,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Unknown status request error.",
+    };
+  }
+}
+
 function getSlashCommandName(interaction: ChatInputCommandInteraction): DiscordSlashCommandName | null {
   if (
-    interaction.commandName === DISCORD_SLASH_COMMAND_NAMES.quit
+    interaction.commandName === DISCORD_SLASH_COMMAND_NAMES.status
+    || interaction.commandName === DISCORD_SLASH_COMMAND_NAMES.quit
     || interaction.commandName === DISCORD_SLASH_COMMAND_NAMES.startProject
     || interaction.commandName === DISCORD_SLASH_COMMAND_NAMES.stopProject
   ) {
@@ -1123,6 +1266,20 @@ export async function handleDiscordSlashCommandInteraction(
   }
 
   await interaction.deferReply();
+
+  if (commandName === DISCORD_SLASH_COMMAND_NAMES.status) {
+    const result = await processStatusControlCommand(
+      interaction.id,
+      `discord:${interaction.user.id}`,
+      handlers,
+    );
+    const replyContent = buildStatusAcknowledgementContent(config.operatorUserId, result);
+    await interaction.editReply({ content: replyContent });
+    return {
+      gracefulShutdownRequest: null,
+      replyContent,
+    };
+  }
 
   if (commandName === DISCORD_SLASH_COMMAND_NAMES.quit) {
     const mode = interaction.options.getString("mode", true) as GracefulShutdownMode;
@@ -1398,6 +1555,22 @@ export async function pollDiscordGracefulShutdownCommand(
         continue;
       }
 
+      if (parseStatusCommand(message.content) && handlers.onStatus) {
+        const result = await processStatusControlCommand(
+          message.id,
+          `discord:${config.operatorUserId}`,
+          handlers,
+        );
+        try {
+          await sendStatusAcknowledgement(config, result);
+        } catch (error) {
+          const sendMessage = buildStepFailureMessage("send-status-ack", error);
+          console.error(`Discord status acknowledgement failed: ${sendMessage}`);
+          logDiscordMissingAccessHint(sendMessage);
+        }
+        continue;
+      }
+
       const stopProjectCommandSuffix = parseStopProjectCommand(message.content);
       if (stopProjectCommandSuffix !== null && handlers.onStopProject) {
         const parsedStopMode = parseStopProjectModeFromSuffix(stopProjectCommandSuffix);
@@ -1503,7 +1676,7 @@ async function startDiscordSlashCommandListener(
     void registerDiscordSlashCommands(readyClient, config)
       .then(() => {
         console.log(
-          `Discord slash commands registered in guild ${config.guildId}: /${DISCORD_SLASH_COMMAND_NAMES.quit}, /${DISCORD_SLASH_COMMAND_NAMES.startProject}, /${DISCORD_SLASH_COMMAND_NAMES.stopProject}.`,
+          `Discord slash commands registered in guild ${config.guildId}: /${DISCORD_SLASH_COMMAND_NAMES.status}, /${DISCORD_SLASH_COMMAND_NAMES.quit}, /${DISCORD_SLASH_COMMAND_NAMES.startProject}, /${DISCORD_SLASH_COMMAND_NAMES.stopProject}.`,
         );
       })
       .catch((error: unknown) => {

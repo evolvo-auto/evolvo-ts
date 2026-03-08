@@ -1429,6 +1429,82 @@ describe("operatorControl", () => {
     );
   });
 
+  it("acknowledges an authorized status request with project and deferred-stop details", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const onStatus = vi.fn().mockResolvedValue({
+      ok: true,
+      snapshot: {
+        online: true,
+        runtimeState: "active",
+        workMode: "project-work",
+        activitySummary: "Executing issue #17.",
+        activeProject: {
+          displayName: "Habit CLI",
+          slug: "habit-cli",
+          repository: "evolvo-auto/habit-cli",
+        },
+        activeIssue: {
+          number: 17,
+          title: "Fix project status routing",
+          repository: "evolvo-auto/habit-cli",
+          lifecycleState: "selected -> executing",
+        },
+        deferredStop: "when-project-complete",
+        cycle: {
+          current: 4,
+          limit: 10,
+          remaining: 6,
+        },
+      },
+    });
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: "7180", content: "boot", author: { id: "someone" } }]), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ id: "7181", content: "status", author: { id: "operator-1" } }]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ack-status" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await pollDiscordGracefulShutdownCommand(workDir, { onStatus });
+
+    expect(onStatus).toHaveBeenCalledWith({
+      messageId: "7181",
+      requestedAt: expect.any(String),
+      requestedBy: "discord:operator-1",
+    });
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      "https://discord.com/api/v10/channels/channel-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: [
+            "<@operator-1> Evolvo is online.",
+            "Runtime state: `active`",
+            "Work mode: `project-work`",
+            "Activity: Executing issue #17.",
+            "Project: Habit CLI (`habit-cli`) | repo: `evolvo-auto/habit-cli`",
+            "Issue: #17 Fix project status routing | repo: `evolvo-auto/habit-cli`",
+            "Lifecycle: selected -> executing",
+            "Deferred stop: current project will stop when complete, then Evolvo will return to self-work.",
+            "Cycle: 4 of 10 (6 remaining after this cycle)",
+          ].join("\n"),
+        }),
+      }),
+    );
+  });
+
   it("acknowledges invalid authorized startProject commands without calling the handler", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
@@ -1848,6 +1924,72 @@ describe("operatorControl", () => {
         "<@operator-1> Current project `Habit CLI` will stop when complete.",
         "Project `habit-cli` will keep running until it has no actionable issues left. Evolvo will then stop it automatically, return to self-work, and remain online.",
         "Evolvo will return to self-work afterward and remain online for further operator commands.",
+      ].join("\n"),
+    });
+  });
+
+  it("handles an authorized /status slash command", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const onStatus = vi.fn().mockResolvedValue({
+      ok: true,
+      snapshot: {
+        online: true,
+        runtimeState: "waiting",
+        workMode: "idle",
+        activitySummary: "Waiting for further operator instructions.",
+        activeProject: null,
+        activeIssue: null,
+        deferredStop: null,
+        cycle: {
+          current: null,
+          limit: 10,
+          remaining: 10,
+        },
+      },
+    });
+    const interaction = createSlashInteraction({
+      id: "slash-status-1",
+      commandName: "status",
+    });
+
+    const result = await handleDiscordSlashCommandInteraction(interaction, workDir, { onStatus });
+
+    expect(onStatus).toHaveBeenCalledWith({
+      messageId: "slash-status-1",
+      requestedAt: expect.any(String),
+      requestedBy: "discord:operator-1",
+    });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: [
+        "<@operator-1> Evolvo is online.",
+        "Runtime state: `waiting`",
+        "Work mode: `idle`",
+        "Activity: Waiting for further operator instructions.",
+        "Project: none",
+        "Issue: none",
+        "Lifecycle: none",
+        "Deferred stop: none",
+        "Cycle: not started yet (10 total budget available)",
+      ].join("\n"),
+    });
+    expect(result).toEqual({
+      gracefulShutdownRequest: null,
+      replyContent: [
+        "<@operator-1> Evolvo is online.",
+        "Runtime state: `waiting`",
+        "Work mode: `idle`",
+        "Activity: Waiting for further operator instructions.",
+        "Project: none",
+        "Issue: none",
+        "Lifecycle: none",
+        "Deferred stop: none",
+        "Cycle: not started yet (10 total budget available)",
       ].join("\n"),
     });
   });

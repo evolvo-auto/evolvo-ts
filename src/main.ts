@@ -41,6 +41,7 @@ import {
 import {
   notifyCycleLimitDecisionAppliedInDiscord,
   notifyDeferredProjectStopTriggeredInDiscord,
+  type StatusCommandResult,
   type StopProjectCommandResult,
   notifyIssueStartedInDiscord,
   notifyRuntimeQuittingInDiscord,
@@ -98,6 +99,12 @@ import {
   findProjectBySlug,
   readProjectRegistry,
 } from "./projects/projectRegistry.js";
+import {
+  buildRuntimeStatusSnapshot,
+  type RuntimeStatusIssue,
+  type RuntimeStatusProject,
+  type RuntimeStatusState,
+} from "./runtime/runtimeStatus.js";
 
 const MAX_ISSUE_CYCLES = 10;
 const MIN_REPLENISH_ISSUES = 3;
@@ -276,6 +283,36 @@ function buildStopProjectResultLog(result: StopProjectCommandResult): string {
   return "[stopProject] no active project was selected. Runtime remains online.";
 }
 
+async function resolveActiveStatusProject(
+  activeProjectSlug: string | null,
+  defaultProjectContext: ReturnType<typeof buildDefaultProjectContext>,
+): Promise<RuntimeStatusProject | null> {
+  if (activeProjectSlug === null) {
+    return null;
+  }
+
+  try {
+    const registry = await readProjectRegistry(WORK_DIR, defaultProjectContext);
+    const projectRecord = findProjectBySlug(registry, activeProjectSlug);
+    if (projectRecord !== null) {
+      return {
+        displayName: projectRecord.displayName,
+        slug: projectRecord.slug,
+        repository: `${projectRecord.executionRepo.owner}/${projectRecord.executionRepo.repo}`,
+      };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    console.error(`[status] could not resolve project metadata for ${activeProjectSlug}: ${message}`);
+  }
+
+  return {
+    displayName: activeProjectSlug,
+    slug: activeProjectSlug,
+    repository: null,
+  };
+}
+
 function issueTargetsProject(issue: UnifiedIssue, projectSlug: string): boolean {
   const normalizedProjectSlug = projectSlug.trim().toLowerCase();
   if (!normalizedProjectSlug) {
@@ -363,6 +400,11 @@ export async function main(): Promise<void> {
   });
   let activeProjectState = await readActiveProjectState(WORK_DIR);
   let stoppedProjectIdleLoggedSlug: string | null = null;
+  let runtimeStatusState: RuntimeStatusState = "starting";
+  let runtimeStatusActivitySummary = "Starting runtime.";
+  let runtimeStatusCycle: number | null = null;
+  let runtimeStatusCycleLimit: number | null = MAX_ISSUE_CYCLES;
+  let runtimeStatusIssue: RuntimeStatusIssue | null = null;
   const discordHandlers: DiscordControlHandlers = {
     onStartProject: async (request) => {
       const result = await handleStartProjectCommand({
@@ -476,6 +518,25 @@ export async function main(): Promise<void> {
       console.log(buildStopProjectResultLog(result));
       return result;
     },
+    onStatus: async (request): Promise<StatusCommandResult> => {
+      const activeProject = await resolveActiveStatusProject(activeProjectState.activeProjectSlug, defaultProjectContext);
+      const snapshot = buildRuntimeStatusSnapshot({
+        runtimeState: runtimeStatusState,
+        activitySummary: runtimeStatusActivitySummary,
+        activeProjectState,
+        activeProject,
+        activeIssue: runtimeStatusIssue,
+        currentCycle: runtimeStatusCycle,
+        cycleLimit: runtimeStatusCycleLimit,
+      });
+      console.log(
+        `[status] served runtime status to ${request.requestedBy}: state=${snapshot.runtimeState} mode=${snapshot.workMode} project=${snapshot.activeProject?.slug ?? "none"} issue=${snapshot.activeIssue?.number ?? "none"}`,
+      );
+      return {
+        ok: true,
+        snapshot,
+      };
+    },
   };
 
   console.log(`Hello from ${GITHUB_OWNER}/${GITHUB_REPO}!`);
@@ -492,15 +553,25 @@ export async function main(): Promise<void> {
 
     let cycleLimit = MAX_ISSUE_CYCLES;
     issueCycleLoop: for (let cycle = 1; ; cycle += 1) {
+      runtimeStatusState = "active";
+      runtimeStatusActivitySummary = "Selecting the next issue.";
+      runtimeStatusCycle = cycle;
+      runtimeStatusCycleLimit = cycleLimit;
+      runtimeStatusIssue = null;
       if (await stopIfSingleTaskGracefulShutdownRequested(WORK_DIR, "Stopping before starting a new task.", discordHandlers)) {
         return;
       }
 
       if (cycle > cycleLimit) {
+        runtimeStatusState = "waiting";
+        runtimeStatusActivitySummary = "Waiting for operator cycle-limit decision.";
         const operatorDecision = await requestCycleLimitDecisionFromOperator(cycleLimit);
         if (operatorDecision?.decision === "continue" && operatorDecision.additionalCycles > 0) {
           const currentLimit = cycleLimit;
           cycleLimit += operatorDecision.additionalCycles;
+          runtimeStatusState = "active";
+          runtimeStatusActivitySummary = "Resuming work after cycle-limit extension.";
+          runtimeStatusCycleLimit = cycleLimit;
           console.log(
             `Operator decision via Discord: continue (+${operatorDecision.additionalCycles} cycles). New limit=${cycleLimit}.`,
           );
@@ -514,6 +585,8 @@ export async function main(): Promise<void> {
         }
         if (operatorDecision?.decision === "quit") {
           console.error("Operator decision via Discord: quit.");
+          runtimeStatusState = "stopping";
+          runtimeStatusActivitySummary = "Stopping after operator cycle-limit quit decision.";
           await notifyCycleLimitDecisionAppliedInDiscord({
             decision: "quit",
             currentLimit: cycleLimit,
@@ -521,6 +594,8 @@ export async function main(): Promise<void> {
         }
         console.error(`Reached the maximum number of issue cycles (${cycleLimit}).`);
         if (operatorDecision?.decision !== "quit") {
+          runtimeStatusState = "stopping";
+          runtimeStatusActivitySummary = `Stopping because cycle limit ${cycleLimit} was reached.`;
           await notifyRuntimeQuittingInDiscord(
             `Cycle limit of ${cycleLimit} was reached and no continue decision was applied.`,
           );
@@ -589,6 +664,8 @@ export async function main(): Promise<void> {
             );
             if (activeProjectSelectionCandidates.length === 0) {
               if (unifiedQueue.activeManagedProject !== null) {
+                runtimeStatusState = "active";
+                runtimeStatusActivitySummary = `Replenishing project work for ${unifiedQueue.activeManagedProject.slug}.`;
                 if (
                   await stopIfGracefulShutdownPreventsNewWork(
                     WORK_DIR,
@@ -642,6 +719,8 @@ export async function main(): Promise<void> {
                 slug: activeProjectState.activeProjectSlug,
                 displayName: activeProjectState.activeProjectSlug,
               };
+              runtimeStatusState = "active";
+              runtimeStatusActivitySummary = `Deferred project stop triggered for ${completedProject.slug}. Returning to self-work.`;
               console.log(
                 `[stopProject] project ${completedProject.slug} reached completion with deferred stop active. No actionable project work remains.`,
               );
@@ -672,6 +751,9 @@ export async function main(): Promise<void> {
 
           if (!selectedIssue) {
             if (activeProjectState.selectionState === "stopped" && activeProjectState.activeProjectSlug !== null) {
+              runtimeStatusState = "waiting";
+              runtimeStatusActivitySummary =
+                `Waiting for further operator instructions while project ${activeProjectState.activeProjectSlug} remains stopped.`;
               if (
                 await stopIfGracefulShutdownPreventsNewWork(
                   WORK_DIR,
@@ -703,6 +785,10 @@ export async function main(): Promise<void> {
               return;
             }
 
+            runtimeStatusState = "active";
+            runtimeStatusActivitySummary = unifiedQueue.activeManagedProject !== null
+              ? `Replenishing project work for ${unifiedQueue.activeManagedProject.slug}.`
+              : "Replenishing self-work issue queue.";
             const plannerResult = await runPlannerAgent({
               cycle,
               openIssueCount: openIssues.length,
@@ -751,11 +837,15 @@ export async function main(): Promise<void> {
             }
 
             if (cycle === 1) {
+              runtimeStatusState = "stopping";
+              runtimeStatusActivitySummary = "Stopping because no open issues are available on startup.";
               console.log(DEFAULT_PROMPT);
               await notifyRuntimeQuittingInDiscord(
                 "No open issues are available, so Evolvo is shutting down until more work is created.",
               );
             } else {
+              runtimeStatusState = "stopping";
+              runtimeStatusActivitySummary = "Stopping because no actionable work remains.";
               console.log("No actionable open issues remaining and no new issues were created. Issue loop stopped.");
               await notifyRuntimeQuittingInDiscord(
                 "No actionable open issues remain and no new work was created, so Evolvo is shutting down.",
@@ -844,6 +934,15 @@ export async function main(): Promise<void> {
             });
           }
 
+          runtimeStatusState = "active";
+          runtimeStatusActivitySummary = `Executing issue #${selectedIssue.number}.`;
+          runtimeStatusIssue = {
+            number: selectedIssue.number,
+            title: selectedIssue.title,
+            repository: selectedIssue.repository.reference,
+            lifecycleState: "selected -> executing",
+          };
+
           const isProvisioningIssue = isTrackerIssue(selectedIssue) && isProjectProvisioningRequestIssue(selectedIssue);
           if (isTrackerIssue(selectedIssue)) {
             await transitionIssueLifecycleState(issueManager, {
@@ -923,6 +1022,9 @@ export async function main(): Promise<void> {
               }
             }
 
+            runtimeStatusIssue = null;
+            runtimeStatusActivitySummary = "Selecting the next issue.";
+
             if (
               await stopIfSingleTaskGracefulShutdownRequested(
                 WORK_DIR,
@@ -975,6 +1077,8 @@ export async function main(): Promise<void> {
           });
 
           if (runError) {
+            runtimeStatusIssue = null;
+            runtimeStatusActivitySummary = "Selecting the next issue.";
             if (isTrackerIssue(selectedIssue)) {
               await transitionIssueLifecycleState(issueManager, {
                 issue: selectedIssue,
@@ -1113,6 +1217,9 @@ export async function main(): Promise<void> {
 
             console.log("Merged pull request detected for a managed project. Continuing without self-restart.");
           }
+
+          runtimeStatusIssue = null;
+          runtimeStatusActivitySummary = "Selecting the next issue.";
 
           if (
             await stopIfSingleTaskGracefulShutdownRequested(
