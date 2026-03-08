@@ -11,6 +11,7 @@ describe("runtimeStatus", () => {
         selectionState: null,
         deferredStopMode: null,
       },
+      activeProjects: [],
       activeProject: null,
       activeIssue: {
         number: 404,
@@ -27,6 +28,7 @@ describe("runtimeStatus", () => {
       runtimeState: "active",
       workMode: "self-work",
       activitySummary: "Selecting next issue.",
+      activeProjects: [],
       activeProject: null,
       activeIssue: {
         number: 404,
@@ -52,6 +54,13 @@ describe("runtimeStatus", () => {
         selectionState: "active",
         deferredStopMode: "when-project-complete",
       },
+      activeProjects: [
+        {
+          displayName: "Habit CLI",
+          slug: "habit-cli",
+          repository: "evolvo-auto/habit-cli",
+        },
+      ],
       activeProject: {
         displayName: "Habit CLI",
         slug: "habit-cli",
@@ -90,6 +99,13 @@ describe("runtimeStatus", () => {
         selectionState: "stopped",
         deferredStopMode: null,
       },
+      activeProjects: [
+        {
+          displayName: "Habit CLI",
+          slug: "habit-cli",
+          repository: "evolvo-auto/habit-cli",
+        },
+      ],
       activeProject: {
         displayName: "Habit CLI",
         slug: "habit-cli",

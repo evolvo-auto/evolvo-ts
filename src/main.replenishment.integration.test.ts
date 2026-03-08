@@ -20,6 +20,9 @@ const tryResolveRepositoryDefaultBranchMock = vi.fn();
 const ensureProjectRegistryMock = vi.fn();
 const readProjectRegistryMock = vi.fn();
 const readActiveProjectStateMock = vi.fn();
+const readActiveProjectsStateMock = vi.fn();
+const activateProjectInStateMock = vi.fn();
+const deactivateProjectInStateMock = vi.fn();
 const stopActiveProjectStateMock = vi.fn();
 const clearActiveProjectStateMock = vi.fn();
 const resolveProjectExecutionContextForIssueMock = vi.fn();
@@ -235,6 +238,12 @@ vi.mock("./projects/activeProjectState.js", () => ({
   clearActiveProjectState: clearActiveProjectStateMock,
   readActiveProjectState: readActiveProjectStateMock,
   stopActiveProjectState: stopActiveProjectStateMock,
+}));
+
+vi.mock("./projects/activeProjectsState.js", () => ({
+  activateProjectInState: activateProjectInStateMock,
+  deactivateProjectInState: deactivateProjectInStateMock,
+  readActiveProjectsState: readActiveProjectsStateMock,
 }));
 
 vi.mock("./projects/projectExecutionContext.js", () => ({
@@ -535,6 +544,21 @@ describe("main replenishment integration", () => {
       updatedAt: null,
       requestedBy: null,
       source: null,
+    });
+    readActiveProjectsStateMock.mockReset();
+    readActiveProjectsStateMock.mockResolvedValue({
+      version: 1,
+      projects: [],
+    });
+    activateProjectInStateMock.mockReset();
+    activateProjectInStateMock.mockResolvedValue({
+      version: 1,
+      projects: [],
+    });
+    deactivateProjectInStateMock.mockReset();
+    deactivateProjectInStateMock.mockResolvedValue({
+      version: 1,
+      projects: [],
     });
     stopActiveProjectStateMock.mockReset();
     stopActiveProjectStateMock.mockResolvedValue({

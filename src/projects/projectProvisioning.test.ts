@@ -14,6 +14,7 @@ import {
 } from "./projectProvisioning.js";
 import { getProjectRegistryPath, upsertProjectRecord } from "./projectRegistry.js";
 import { getActiveProjectStatePath } from "./activeProjectState.js";
+import { getActiveProjectsStatePath } from "./activeProjectsState.js";
 
 async function createTempWorkDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "project-provisioning-"));
@@ -717,6 +718,17 @@ describe("projectProvisioning", () => {
       updatedAt: expect.any(String),
       requestedBy: "discord:operator-1",
       source: "project-provisioning",
+    });
+    expect(JSON.parse(await readFile(getActiveProjectsStatePath(workDir), "utf8"))).toEqual({
+      version: 1,
+      projects: [
+        {
+          slug: "habit-cli",
+          updatedAt: expect.any(String),
+          requestedBy: "discord:operator-1",
+          source: "project-provisioning",
+        },
+      ],
     });
     expect(logSpy).toHaveBeenCalledWith(
       `[project-workspace] resolved ${createManagedWorkspacePath(workDir)}; created directory; ${createManagedWorkspacePath(workDir)} is now the active working directory for project habit-cli.`,

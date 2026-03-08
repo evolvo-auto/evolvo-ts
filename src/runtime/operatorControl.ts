@@ -829,6 +829,20 @@ function formatStatusProjectLine(snapshot: RuntimeStatusSnapshot): string {
   return `Project: ${snapshot.activeProject.displayName} (\`${snapshot.activeProject.slug}\`)${repositorySuffix}`;
 }
 
+function formatStatusActiveProjectsLine(snapshot: RuntimeStatusSnapshot): string {
+  if (snapshot.activeProjects.length === 0) {
+    return "Active projects: none";
+  }
+
+  return `Active projects: ${snapshot.activeProjects
+    .map((project) =>
+      project.repository
+        ? `${project.displayName} (\`${project.slug}\`, \`${project.repository}\`)`
+        : `${project.displayName} (\`${project.slug}\`)`
+    )
+    .join(", ")}`;
+}
+
 function formatStatusIssueLine(snapshot: RuntimeStatusSnapshot): string {
   if (snapshot.activeIssue === null) {
     return "Issue: none";
@@ -889,6 +903,7 @@ function buildStatusAcknowledgementContent(
     `Runtime state: \`${snapshot.runtimeState}\``,
     `Work mode: \`${snapshot.workMode}\``,
     `Activity: ${snapshot.activitySummary ?? "unavailable"}`,
+    formatStatusActiveProjectsLine(snapshot),
     formatStatusProjectLine(snapshot),
     formatStatusIssueLine(snapshot),
     formatStatusLifecycleLine(snapshot),

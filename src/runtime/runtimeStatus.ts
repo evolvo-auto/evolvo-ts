@@ -27,6 +27,7 @@ export type RuntimeStatusSnapshot = {
   runtimeState: RuntimeStatusState;
   workMode: RuntimeWorkMode;
   activitySummary: string | null;
+  activeProjects: RuntimeStatusProject[];
   activeProject: RuntimeStatusProject | null;
   activeIssue: RuntimeStatusIssue | null;
   deferredStop: ActiveProjectState["deferredStopMode"] | null;
@@ -87,6 +88,7 @@ export function buildRuntimeStatusSnapshot(input: {
   runtimeState: RuntimeStatusState;
   activitySummary: string | null;
   activeProjectState: Pick<ActiveProjectState, "activeProjectSlug" | "selectionState" | "deferredStopMode">;
+  activeProjects: RuntimeStatusProject[];
   activeProject: RuntimeStatusProject | null;
   activeIssue: RuntimeStatusIssue | null;
   currentCycle: number | null;
@@ -97,6 +99,7 @@ export function buildRuntimeStatusSnapshot(input: {
     runtimeState: input.runtimeState,
     workMode: deriveWorkMode(input.activeProjectState, input.runtimeState),
     activitySummary: input.activitySummary?.trim() || null,
+    activeProjects: input.activeProjects,
     activeProject: input.activeProject,
     activeIssue: input.activeIssue,
     deferredStop: input.activeProjectState.deferredStopMode ?? null,

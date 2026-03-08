@@ -81,6 +81,7 @@ import {
 } from "./projects/projectProvisioning.js";
 import { parseProjectProvisioningIssueMetadata } from "./issues/projectProvisioningIssue.js";
 import { clearActiveProjectState, readActiveProjectState, stopActiveProjectState } from "./projects/activeProjectState.js";
+import { activateProjectInState, deactivateProjectInState, readActiveProjectsState } from "./projects/activeProjectsState.js";
 import {
   PROJECT_ROUTING_BLOCKED_LABEL,
   buildProjectRoutingBlockedComment,
@@ -313,6 +314,52 @@ async function resolveActiveStatusProject(
   };
 }
 
+async function resolveActiveStatusProjects(
+  defaultProjectContext: ReturnType<typeof buildDefaultProjectContext>,
+): Promise<RuntimeStatusProject[]> {
+  try {
+    const [activeProjectsState, registry] = await Promise.all([
+      readActiveProjectsState(WORK_DIR),
+      readProjectRegistry(WORK_DIR, defaultProjectContext),
+    ]);
+
+    const managedProjects = activeProjectsState.projects.map((entry) => {
+      const projectRecord = findProjectBySlug(registry, entry.slug);
+      if (projectRecord !== null) {
+        return {
+          displayName: projectRecord.displayName,
+          slug: projectRecord.slug,
+          repository: `${projectRecord.executionRepo.owner}/${projectRecord.executionRepo.repo}`,
+        };
+      }
+
+      return {
+        displayName: entry.slug,
+        slug: entry.slug,
+        repository: null,
+      };
+    });
+    const defaultProjectRecord = findProjectBySlug(registry, "evolvo");
+    const defaultProject: RuntimeStatusProject = defaultProjectRecord !== null
+      ? {
+        displayName: defaultProjectRecord.displayName,
+        slug: defaultProjectRecord.slug,
+        repository: `${defaultProjectRecord.executionRepo.owner}/${defaultProjectRecord.executionRepo.repo}`,
+      }
+      : {
+        displayName: "Evolvo",
+        slug: "evolvo",
+        repository: `${defaultProjectContext.owner}/${defaultProjectContext.repo}`,
+      };
+
+    return [defaultProject, ...managedProjects];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    console.error(`[status] could not resolve active project set: ${message}`);
+    return [];
+  }
+}
+
 function issueTargetsProject(issue: UnifiedIssue, projectSlug: string): boolean {
   const normalizedProjectSlug = projectSlug.trim().toLowerCase();
   if (!normalizedProjectSlug) {
@@ -417,6 +464,13 @@ export async function main(): Promise<void> {
         requestedAt: request.requestedAt,
       });
       if (result.ok) {
+        await activateProjectInState({
+          workDir: WORK_DIR,
+          slug: result.project.slug,
+          requestedBy: request.requestedBy,
+          source: "start-project-command",
+          updatedAt: request.requestedAt,
+        });
         activeProjectState = {
           version: activeProjectState.version,
           activeProjectSlug: result.project.slug,
@@ -431,6 +485,7 @@ export async function main(): Promise<void> {
             ? `[startProject] created new project flow for ${result.project.displayName} (${result.project.slug}) at ${result.project.workspacePath}.`
             : `[startProject] resumed existing project ${result.project.displayName} (${result.project.slug}) with status ${result.project.status} at ${result.project.workspacePath}.`,
         );
+        console.log(`[projects] marked ${result.project.slug} as active in the multi-project set.`);
       } else {
         console.error(`[startProject] failed for ${request.displayName}: ${result.message}`);
       }
@@ -515,15 +570,24 @@ export async function main(): Promise<void> {
             action: "no-active-project",
             message: "There is no active project to stop. Evolvo remains online and ready for further operator commands.",
           };
+      if (
+        stopResult.state.activeProjectSlug !== null
+        && (stopResult.status === "stopped" || stopResult.status === "already-stopped")
+      ) {
+        await deactivateProjectInState(WORK_DIR, stopResult.state.activeProjectSlug);
+        console.log(`[projects] removed ${stopResult.state.activeProjectSlug} from the multi-project active set.`);
+      }
       console.log(buildStopProjectResultLog(result));
       return result;
     },
     onStatus: async (request): Promise<StatusCommandResult> => {
+      const activeProjects = await resolveActiveStatusProjects(defaultProjectContext);
       const activeProject = await resolveActiveStatusProject(activeProjectState.activeProjectSlug, defaultProjectContext);
       const snapshot = buildRuntimeStatusSnapshot({
         runtimeState: runtimeStatusState,
         activitySummary: runtimeStatusActivitySummary,
         activeProjectState,
+        activeProjects,
         activeProject,
         activeIssue: runtimeStatusIssue,
         currentCycle: runtimeStatusCycle,
@@ -725,6 +789,8 @@ export async function main(): Promise<void> {
                 `[stopProject] project ${completedProject.slug} reached completion with deferred stop active. No actionable project work remains.`,
               );
               activeProjectState = await clearActiveProjectState(WORK_DIR);
+              await deactivateProjectInState(WORK_DIR, completedProject.slug);
+              console.log(`[projects] removed ${completedProject.slug} from the multi-project active set after deferred completion.`);
               stoppedProjectIdleLoggedSlug = null;
               console.log(
                 `[stopProject] switched from project ${completedProject.displayName} (${completedProject.slug}) back to Evolvo self-work. Runtime remains online.`,

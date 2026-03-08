@@ -42,6 +42,9 @@ const configureCodingAgentExecutionContextMock = vi.fn();
 const ensureProjectRegistryMock = vi.fn();
 const readProjectRegistryMock = vi.fn();
 const readActiveProjectStateMock = vi.fn();
+const readActiveProjectsStateMock = vi.fn();
+const activateProjectInStateMock = vi.fn();
+const deactivateProjectInStateMock = vi.fn();
 const stopActiveProjectStateMock = vi.fn();
 const clearActiveProjectStateMock = vi.fn();
 const resolveProjectExecutionContextForIssueMock = vi.fn();
@@ -215,6 +218,12 @@ vi.mock("./projects/activeProjectState.js", () => ({
   clearActiveProjectState: clearActiveProjectStateMock,
   readActiveProjectState: readActiveProjectStateMock,
   stopActiveProjectState: stopActiveProjectStateMock,
+}));
+
+vi.mock("./projects/activeProjectsState.js", () => ({
+  activateProjectInState: activateProjectInStateMock,
+  deactivateProjectInState: deactivateProjectInStateMock,
+  readActiveProjectsState: readActiveProjectsStateMock,
 }));
 
 vi.mock("./projects/projectExecutionContext.js", () => ({
@@ -442,6 +451,22 @@ describe("main", () => {
       updatedAt: null,
       requestedBy: null,
       source: null,
+    });
+    stopActiveProjectStateMock.mockReset();
+    readActiveProjectsStateMock.mockReset();
+    readActiveProjectsStateMock.mockResolvedValue({
+      version: 1,
+      projects: [],
+    });
+    activateProjectInStateMock.mockReset();
+    activateProjectInStateMock.mockResolvedValue({
+      version: 1,
+      projects: [],
+    });
+    deactivateProjectInStateMock.mockReset();
+    deactivateProjectInStateMock.mockResolvedValue({
+      version: 1,
+      projects: [],
     });
     stopActiveProjectStateMock.mockReset();
     stopActiveProjectStateMock.mockResolvedValue({
@@ -721,8 +746,18 @@ describe("main", () => {
         alreadyOpen: false,
       },
     });
+    expect(activateProjectInStateMock).toHaveBeenCalledWith({
+      workDir: "/tmp/evolvo",
+      slug: "habit-cli",
+      requestedBy: "discord:operator-1",
+      source: "start-project-command",
+      updatedAt: "2026-03-08T09:00:00.000Z",
+    });
     expect(console.log).toHaveBeenCalledWith(
       "[startProject] created new project flow for Habit CLI (habit-cli) at /home/paddy/habit-cli.",
+    );
+    expect(console.log).toHaveBeenCalledWith(
+      "[projects] marked habit-cli as active in the multi-project set.",
     );
   });
 
@@ -774,7 +809,11 @@ describe("main", () => {
         slug: "habit-cli",
       },
     });
+    expect(deactivateProjectInStateMock).toHaveBeenCalledWith("/tmp/evolvo", "habit-cli");
     expect(console.log).toHaveBeenCalledWith("[stopProject] received stop request from discord:operator-1.");
+    expect(console.log).toHaveBeenCalledWith(
+      "[projects] removed habit-cli from the multi-project active set.",
+    );
     expect(console.log).toHaveBeenCalledWith("[stopProject] halted project Habit CLI. Runtime remains online.");
   });
 
@@ -838,6 +877,7 @@ describe("main", () => {
         slug: "habit-cli",
       },
     });
+    expect(deactivateProjectInStateMock).not.toHaveBeenCalled();
     expect(console.log).toHaveBeenCalledWith("[stopProject] received stop request from discord:operator-1.");
     expect(console.log).toHaveBeenCalledWith(
       "[stopProject] project Habit CLI will stop automatically when it runs out of actionable work. Evolvo will then return to self-work.",
@@ -883,11 +923,18 @@ describe("main", () => {
         ok: true,
         snapshot: {
           online: true,
-          runtimeState: "active",
-          workMode: "self-work",
-          activitySummary: "Executing issue #403.",
-          activeProject: null,
-          activeIssue: {
+        runtimeState: "active",
+        workMode: "self-work",
+        activitySummary: "Executing issue #403.",
+        activeProjects: [
+          {
+            displayName: "Evolvo",
+            slug: "evolvo",
+            repository: "owner/repo",
+          },
+        ],
+        activeProject: null,
+        activeIssue: {
             number: 403,
             title: "Add status command",
             repository: "owner/repo",
@@ -1341,10 +1388,14 @@ describe("main", () => {
       workDir: "/home/paddy/habit-cli",
     }));
     expect(clearActiveProjectStateMock).toHaveBeenCalledWith("/tmp/evolvo");
+    expect(deactivateProjectInStateMock).toHaveBeenCalledWith("/tmp/evolvo", "habit-cli");
     expect(notifyDeferredProjectStopTriggeredInDiscordMock).toHaveBeenCalledWith({
       displayName: "Habit CLI",
       slug: "habit-cli",
     });
+    expect(console.log).toHaveBeenCalledWith(
+      "[projects] removed habit-cli from the multi-project active set after deferred completion.",
+    );
     expect(console.log).toHaveBeenCalledWith(
       "[stopProject] project habit-cli reached completion with deferred stop active. No actionable project work remains.",
     );
@@ -1501,6 +1552,7 @@ describe("main", () => {
       expect.stringContaining("Issue #31: Generated project follow-up\n\nproject work"),
     );
     expect(clearActiveProjectStateMock).toHaveBeenCalledWith("/tmp/evolvo");
+    expect(deactivateProjectInStateMock).toHaveBeenCalledWith("/tmp/evolvo", "habit-cli");
     expect(notifyDeferredProjectStopTriggeredInDiscordMock).toHaveBeenCalledWith({
       displayName: "Habit CLI",
       slug: "habit-cli",

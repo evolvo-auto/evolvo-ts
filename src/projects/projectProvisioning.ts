@@ -9,6 +9,7 @@ import {
 import { deployProjectRepositoryWithVercel, type ProjectRepositoryDeploymentResult } from "../deployment/vercelDeployment.js";
 import type { IssueSummary, TaskIssueManager } from "../issues/taskIssueManager.js";
 import { setActiveProjectState } from "./activeProjectState.js";
+import { activateProjectInState } from "./activeProjectsState.js";
 import {
   normalizeProjectNameInput,
   resolveManagedProjectWorkspacePath,
@@ -757,6 +758,12 @@ export async function executeProjectProvisioningIssue(options: {
 
   try {
     await setActiveProjectState({
+      workDir: options.workDir,
+      slug: metadata.slug,
+      requestedBy: metadata.requestedBy,
+      source: "project-provisioning",
+    });
+    await activateProjectInState({
       workDir: options.workDir,
       slug: metadata.slug,
       requestedBy: metadata.requestedBy,
