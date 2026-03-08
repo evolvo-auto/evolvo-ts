@@ -27,7 +27,9 @@ const buildLifecycleStateCommentMock = vi.fn();
 const writeRuntimeReadinessSignalMock = vi.fn();
 const requestCycleLimitDecisionFromOperatorMock = vi.fn();
 const runDiscordOperatorControlStartupCheckMock = vi.fn();
+const notifyCycleLimitDecisionAppliedInDiscordMock = vi.fn();
 const notifyIssueStartedInDiscordMock = vi.fn();
+const notifyRuntimeQuittingInDiscordMock = vi.fn();
 const pollDiscordGracefulShutdownCommandMock = vi.fn();
 const startDiscordGracefulShutdownListenerMock = vi.fn();
 const stopDiscordGracefulShutdownListenerMock = vi.fn();
@@ -161,7 +163,9 @@ vi.mock("./runtime/gracefulShutdown.js", () => ({
 }));
 
 vi.mock("./runtime/operatorControl.js", () => ({
+  notifyCycleLimitDecisionAppliedInDiscord: notifyCycleLimitDecisionAppliedInDiscordMock,
   notifyIssueStartedInDiscord: notifyIssueStartedInDiscordMock,
+  notifyRuntimeQuittingInDiscord: notifyRuntimeQuittingInDiscordMock,
   pollDiscordGracefulShutdownCommand: pollDiscordGracefulShutdownCommandMock,
   requestCycleLimitDecisionFromOperator: requestCycleLimitDecisionFromOperatorMock,
   runDiscordOperatorControlStartupCheck: runDiscordOperatorControlStartupCheckMock,
@@ -449,8 +453,12 @@ describe("main", () => {
     requestCycleLimitDecisionFromOperatorMock.mockResolvedValue(null);
     runDiscordOperatorControlStartupCheckMock.mockReset();
     runDiscordOperatorControlStartupCheckMock.mockResolvedValue(undefined);
+    notifyCycleLimitDecisionAppliedInDiscordMock.mockReset();
+    notifyCycleLimitDecisionAppliedInDiscordMock.mockResolvedValue(undefined);
     notifyIssueStartedInDiscordMock.mockReset();
     notifyIssueStartedInDiscordMock.mockResolvedValue(undefined);
+    notifyRuntimeQuittingInDiscordMock.mockReset();
+    notifyRuntimeQuittingInDiscordMock.mockResolvedValue(undefined);
     stopDiscordGracefulShutdownListenerMock.mockReset();
     stopDiscordGracefulShutdownListenerMock.mockResolvedValue(undefined);
     startDiscordGracefulShutdownListenerMock.mockReset();
@@ -974,6 +982,9 @@ describe("main", () => {
       }),
     );
     expect(runPostMergeSelfRestartMock).toHaveBeenCalledWith("/tmp/evolvo");
+    expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
+      "Post-merge restart workflow completed. This runtime is quitting so the restarted runtime can take over.",
+    );
   });
 
   it("logs restart failures clearly and exits current runtime", async () => {
@@ -991,6 +1002,9 @@ describe("main", () => {
     await main();
 
     expect(console.error).toHaveBeenCalledWith("restart failed");
+    expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
+      "Post-merge restart workflow failed, and this runtime is still quitting after the merged pull request.",
+    );
   });
 
   it("replenishes issues and continues when queue is empty", async () => {
@@ -1024,6 +1038,9 @@ describe("main", () => {
       ],
     });
     expect(runCodingAgentMock).toHaveBeenCalledWith("Issue #19: Generated\n\ngenerated");
+    expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
+      "No actionable open issues remain and no new work was created, so Evolvo is shutting down.",
+    );
     expect(console.log).toHaveBeenCalledWith(
       "Cycle 1 queue health: open=0 selected=none queueAction=bootstrap created=1 outcome=continue",
     );
@@ -1088,6 +1105,9 @@ describe("main", () => {
       "Cycle 1 queue health: open=0 selected=none queueAction=bootstrap created=0 outcome=stop",
     );
     expect(console.log).toHaveBeenCalledWith(DEFAULT_PROMPT);
+    expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
+      "No open issues are available, so Evolvo is shutting down until more work is created.",
+    );
   });
 
   it("logs diagnostics and stops when startup repository analysis throws", async () => {
@@ -1577,6 +1597,12 @@ describe("main", () => {
     expect(console.log).toHaveBeenCalledWith(
       "Operator decision via Discord: continue (+2 cycles). New limit=7.",
     );
+    expect(notifyCycleLimitDecisionAppliedInDiscordMock).toHaveBeenCalledWith({
+      decision: "continue",
+      currentLimit: 5,
+      additionalCycles: 2,
+      newLimit: 7,
+    });
     expect(runCodingAgentMock).toHaveBeenCalledTimes(6);
   });
 
@@ -1596,6 +1622,25 @@ describe("main", () => {
     expect(requestCycleLimitDecisionFromOperatorMock).toHaveBeenCalledWith(5);
     expect(console.error).toHaveBeenCalledWith("Operator decision via Discord: quit.");
     expect(console.error).toHaveBeenCalledWith("Reached the maximum number of issue cycles (5).");
+    expect(notifyCycleLimitDecisionAppliedInDiscordMock).toHaveBeenCalledWith({
+      decision: "quit",
+      currentLimit: 5,
+    });
+  });
+
+  it("sends a pre-quit notification when the cycle limit is reached without a continue decision", async () => {
+    listOpenIssuesMock.mockResolvedValue([
+      { number: 203, title: "Long-running task", description: "still open", state: "open", labels: [] },
+    ]);
+    const { main } = await import("./main.js");
+
+    await main();
+
+    expect(requestCycleLimitDecisionFromOperatorMock).toHaveBeenCalledWith(5);
+    expect(console.error).toHaveBeenCalledWith("Reached the maximum number of issue cycles (5).");
+    expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
+      "Cycle limit of 5 was reached and no continue decision was applied.",
+    );
   });
 
   it("stops before starting a new task when a graceful shutdown request is already pending", async () => {
@@ -1617,6 +1662,9 @@ describe("main", () => {
     expect(markGracefulShutdownRequestEnforcedMock).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
       "Graceful shutdown requested via Discord /quit. Stopping before starting a new task. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
+    );
+    expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
+      "Graceful shutdown via /quit is being enforced. Stopping before starting a new task.",
     );
   });
 
@@ -1653,6 +1701,9 @@ describe("main", () => {
     expect(console.log).toHaveBeenCalledWith(
       "Graceful shutdown requested via Discord /quit. Current task completed. Stopping before starting another issue. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
     );
+    expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
+      "Graceful shutdown via /quit is being enforced. Current task completed. Stopping before starting another issue.",
+    );
   });
 
   it("drains existing issues and suppresses planner replenishment after /quit after tasks", async () => {
@@ -1686,6 +1737,9 @@ describe("main", () => {
     expect(console.log).toHaveBeenCalledWith(
       "Graceful shutdown requested via Discord /quit after tasks. Queue-drain shutdown is active. Planning and replenishment are disabled, so no new work will be started. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
     );
+    expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
+      "Graceful shutdown via /quit after tasks is being enforced. Queue-drain shutdown is active. Planning and replenishment are disabled, so no new work will be started.",
+    );
   });
 
   it("keeps honoring an already-enforced queue-drain shutdown request after restart", async () => {
@@ -1707,6 +1761,9 @@ describe("main", () => {
     expect(markGracefulShutdownRequestEnforcedMock).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
       "Graceful shutdown requested via Discord /quit after tasks. Stopping before starting a new task. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
+    );
+    expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
+      "Graceful shutdown via /quit after tasks is being enforced. Stopping before starting a new task.",
     );
   });
 

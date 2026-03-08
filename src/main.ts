@@ -37,7 +37,9 @@ import {
   type GracefulShutdownRequest,
 } from "./runtime/gracefulShutdown.js";
 import {
+  notifyCycleLimitDecisionAppliedInDiscord,
   notifyIssueStartedInDiscord,
+  notifyRuntimeQuittingInDiscord,
   pollDiscordGracefulShutdownCommand,
   requestCycleLimitDecisionFromOperator,
   runDiscordOperatorControlStartupCheck,
@@ -181,6 +183,13 @@ function buildGracefulShutdownLogMessage(
   return `Graceful shutdown requested via Discord ${request.command}. ${reason} Shutdown intent remains persisted so later restarts do not resume work unexpectedly.`;
 }
 
+function buildGracefulShutdownQuitNotificationReason(
+  request: GracefulShutdownRequest,
+  reason: string,
+): string {
+  return `Graceful shutdown via ${request.command} is being enforced. ${reason}`;
+}
+
 function isQueueDrainGracefulShutdownRequest(request: GracefulShutdownRequest | null): boolean {
   return request?.mode === "after-tasks";
 }
@@ -212,7 +221,9 @@ async function stopIfSingleTaskGracefulShutdownRequested(
   }
 
   const enforced = await markGracefulShutdownRequestEnforced(workDir);
-  console.log(buildGracefulShutdownLogMessage(enforced?.request ?? request, reason));
+  const activeRequest = enforced?.request ?? request;
+  console.log(buildGracefulShutdownLogMessage(activeRequest, reason));
+  await notifyRuntimeQuittingInDiscord(buildGracefulShutdownQuitNotificationReason(activeRequest, reason));
   return true;
 }
 
@@ -230,7 +241,9 @@ async function stopIfGracefulShutdownPreventsNewWork(
   const shutdownReason = isQueueDrainGracefulShutdownRequest(request)
     ? "Queue-drain shutdown is active. Planning and replenishment are disabled, so no new work will be started."
     : reason;
-  console.log(buildGracefulShutdownLogMessage(enforced?.request ?? request, shutdownReason));
+  const activeRequest = enforced?.request ?? request;
+  console.log(buildGracefulShutdownLogMessage(activeRequest, shutdownReason));
+  await notifyRuntimeQuittingInDiscord(buildGracefulShutdownQuitNotificationReason(activeRequest, shutdownReason));
   return true;
 }
 
@@ -285,16 +298,32 @@ export async function main(): Promise<void> {
       if (cycle > cycleLimit) {
         const operatorDecision = await requestCycleLimitDecisionFromOperator(cycleLimit);
         if (operatorDecision?.decision === "continue" && operatorDecision.additionalCycles > 0) {
+          const currentLimit = cycleLimit;
           cycleLimit += operatorDecision.additionalCycles;
           console.log(
             `Operator decision via Discord: continue (+${operatorDecision.additionalCycles} cycles). New limit=${cycleLimit}.`,
           );
+          await notifyCycleLimitDecisionAppliedInDiscord({
+            decision: "continue",
+            currentLimit,
+            additionalCycles: operatorDecision.additionalCycles,
+            newLimit: cycleLimit,
+          });
           continue;
         }
         if (operatorDecision?.decision === "quit") {
           console.error("Operator decision via Discord: quit.");
+          await notifyCycleLimitDecisionAppliedInDiscord({
+            decision: "quit",
+            currentLimit: cycleLimit,
+          });
         }
         console.error(`Reached the maximum number of issue cycles (${cycleLimit}).`);
+        if (operatorDecision?.decision !== "quit") {
+          await notifyRuntimeQuittingInDiscord(
+            `Cycle limit of ${cycleLimit} was reached and no continue decision was applied.`,
+          );
+        }
         return;
       }
 
@@ -393,8 +422,14 @@ export async function main(): Promise<void> {
 
             if (cycle === 1) {
               console.log(DEFAULT_PROMPT);
+              await notifyRuntimeQuittingInDiscord(
+                "No open issues are available, so Evolvo is shutting down until more work is created.",
+              );
             } else {
               console.log("No actionable open issues remaining and no new issues were created. Issue loop stopped.");
+              await notifyRuntimeQuittingInDiscord(
+                "No actionable open issues remain and no new work was created, so Evolvo is shutting down.",
+              );
             }
             return;
           }
@@ -656,6 +691,8 @@ export async function main(): Promise<void> {
             );
             if (executionContext.project.kind === "default") {
               console.log("Merged pull request detected. Running post-merge restart workflow.");
+              let postMergeQuitReason =
+                "Post-merge restart workflow completed. This runtime is quitting so the restarted runtime can take over.";
               try {
                 await runPostMergeSelfRestart(WORK_DIR);
                 await transitionIssueLifecycleState(issueManager, {
@@ -667,6 +704,8 @@ export async function main(): Promise<void> {
                 });
                 console.log("Post-merge restart workflow completed. Exiting current runtime.");
               } catch (error) {
+                postMergeQuitReason =
+                  "Post-merge restart workflow failed, and this runtime is still quitting after the merged pull request.";
                 if (error instanceof Error) {
                   console.error(error.message);
                 } else {
@@ -674,6 +713,7 @@ export async function main(): Promise<void> {
                 }
               }
 
+              await notifyRuntimeQuittingInDiscord(postMergeQuitReason);
               return;
             }
 

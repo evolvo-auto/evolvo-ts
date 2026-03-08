@@ -67,7 +67,21 @@ type DiscordOperatorStep =
   | "send-issue-start"
   | "read-control-commands"
   | "send-quit-ack"
-  | "send-start-project-ack";
+  | "send-start-project-ack"
+  | "send-cycle-decision-ack"
+  | "send-quit-message";
+
+export type CycleLimitDecisionConfirmation =
+  | {
+    decision: "continue";
+    currentLimit: number;
+    additionalCycles: number;
+    newLimit: number;
+  }
+  | {
+    decision: "quit";
+    currentLimit: number;
+  };
 
 type DiscordIssueStartNotification = {
   issue: Pick<IssueSummary, "number" | "title">;
@@ -324,19 +338,29 @@ async function sendIssueStartNotification(
   });
 }
 
+function buildGracefulShutdownBehaviorLine(request: GracefulShutdownRequest): string {
+  return request.mode === "after-tasks"
+    ? "Evolvo will finish the current actionable queue, will not plan or create new work, and will stop once the queue is drained."
+    : "Evolvo will finish the current task and then stop before starting another issue.";
+}
+
 async function sendGracefulShutdownAcknowledgement(
   config: DiscordControlConfig,
   request: GracefulShutdownRequest,
+  options: {
+    created: boolean;
+    requestedCommand: GracefulShutdownRequest["command"];
+  },
 ): Promise<void> {
-  const content = request.mode === "after-tasks"
-    ? [
-      `<@${config.operatorUserId}> Queue-drain shutdown requested.`,
-      "Evolvo will finish the current actionable queue, will not plan or create new work, and will stop once the queue is drained.",
-    ].join("\n")
-    : [
-      `<@${config.operatorUserId}> Graceful shutdown requested.`,
-      "Evolvo will finish the current task and then stop before starting another issue.",
-    ].join("\n");
+  const confirmationLine = options.created
+    ? `<@${config.operatorUserId}> Confirmed: \`${request.command}\` is now active.`
+    : request.command === options.requestedCommand
+      ? `<@${config.operatorUserId}> Confirmed: \`${request.command}\` was already active.`
+      : `<@${config.operatorUserId}> Confirmed: \`${request.command}\` was already active, so the new command did not change the shutdown plan.`;
+  const content = [
+    confirmationLine,
+    buildGracefulShutdownBehaviorLine(request),
+  ].join("\n");
 
   await fetchDiscordJson<{ id: string }>(config, `/channels/${config.controlChannelId}/messages`, {
     method: "POST",
@@ -362,6 +386,42 @@ async function sendStartProjectAcknowledgement(
       result.message,
       "Usage: `/startProject <project-name>`",
     ].join("\n");
+
+  await fetchDiscordJson<{ id: string }>(config, `/channels/${config.controlChannelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+async function sendCycleLimitDecisionConfirmation(
+  config: DiscordControlConfig,
+  confirmation: CycleLimitDecisionConfirmation,
+): Promise<void> {
+  const content = confirmation.decision === "continue"
+    ? [
+      `<@${config.operatorUserId}> Confirmed: continue was applied at the cycle limit.`,
+      `Added ${confirmation.additionalCycles} cycles. New limit: ${confirmation.newLimit}. Evolvo remains online.`,
+    ].join("\n")
+    : [
+      `<@${config.operatorUserId}> Confirmed: quit was applied at the cycle limit (${confirmation.currentLimit}).`,
+      "Evolvo is about to quit intentionally.",
+    ].join("\n");
+
+  await fetchDiscordJson<{ id: string }>(config, `/channels/${config.controlChannelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+async function sendRuntimeQuitNotification(
+  config: DiscordControlConfig,
+  reason: string,
+): Promise<void> {
+  const content = [
+    `<@${config.operatorUserId}> Evolvo is about to quit intentionally.`,
+    `Reason: ${reason}`,
+    "Runtime shutdown is starting now.",
+  ].join("\n");
 
   await fetchDiscordJson<{ id: string }>(config, `/channels/${config.controlChannelId}/messages`, {
     method: "POST",
@@ -578,14 +638,15 @@ export async function pollDiscordGracefulShutdownCommand(
             mode: shutdownCommand.mode,
           });
           gracefulShutdownRequest = recordedRequest.request;
-          if (recordedRequest.created) {
-            try {
-              await sendGracefulShutdownAcknowledgement(config, recordedRequest.request);
-            } catch (error) {
-              const sendMessage = buildStepFailureMessage("send-quit-ack", error);
-              console.error(`Discord graceful shutdown acknowledgement failed: ${sendMessage}`);
-              logDiscordMissingAccessHint(sendMessage);
-            }
+          try {
+            await sendGracefulShutdownAcknowledgement(config, recordedRequest.request, {
+              created: recordedRequest.created,
+              requestedCommand: shutdownCommand.command,
+            });
+          } catch (error) {
+            const sendMessage = buildStepFailureMessage("send-quit-ack", error);
+            console.error(`Discord graceful shutdown acknowledgement failed: ${sendMessage}`);
+            logDiscordMissingAccessHint(sendMessage);
           }
         } else {
           const requestedProjectName = parseStartProjectName(message.content);
@@ -733,6 +794,38 @@ export async function notifyIssueStartedInDiscord(
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     console.error(`Discord issue start notification failed: ${message}`);
+    logDiscordMissingAccessHint(message);
+  }
+}
+
+export async function notifyCycleLimitDecisionAppliedInDiscord(
+  confirmation: CycleLimitDecisionConfirmation,
+): Promise<void> {
+  const config = getDiscordControlConfigFromEnv();
+  if (!config) {
+    return;
+  }
+
+  try {
+    await sendCycleLimitDecisionConfirmation(config, confirmation);
+  } catch (error) {
+    const message = buildStepFailureMessage("send-cycle-decision-ack", error);
+    console.error(`Discord cycle-limit confirmation failed: ${message}`);
+    logDiscordMissingAccessHint(message);
+  }
+}
+
+export async function notifyRuntimeQuittingInDiscord(reason: string): Promise<void> {
+  const config = getDiscordControlConfigFromEnv();
+  if (!config) {
+    return;
+  }
+
+  try {
+    await sendRuntimeQuitNotification(config, reason);
+  } catch (error) {
+    const message = buildStepFailureMessage("send-quit-message", error);
+    console.error(`Discord runtime quit notification failed: ${message}`);
     logDiscordMissingAccessHint(message);
   }
 }
