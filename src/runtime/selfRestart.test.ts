@@ -86,7 +86,7 @@ describe("runPostMergeSelfRestart", () => {
     vi.restoreAllMocks();
   });
 
-  it("runs checkout on the detected default branch, then pulls, installs, builds and starts runtime", async () => {
+  it("runs checkout on the detected default branch, then performs a frozen-lockfile install, builds and starts runtime", async () => {
     execFileMock.mockImplementation((_command: string, _args: string[], _options: unknown, callback: (error: unknown, stdout: string, stderr: string) => void) => {
       callback(null, "", "");
     });
@@ -105,7 +105,13 @@ describe("runPostMergeSelfRestart", () => {
     expect(resolveRepositoryDefaultBranchMock).toHaveBeenCalledWith("/tmp/evolvo");
     expect(execFileMock).toHaveBeenNthCalledWith(1, "git", ["checkout", "trunk"], { cwd: "/tmp/evolvo" }, expect.any(Function));
     expect(execFileMock).toHaveBeenNthCalledWith(2, "git", ["pull", "--ff-only"], { cwd: "/tmp/evolvo" }, expect.any(Function));
-    expect(execFileMock).toHaveBeenNthCalledWith(3, "pnpm", ["i"], { cwd: "/tmp/evolvo" }, expect.any(Function));
+    expect(execFileMock).toHaveBeenNthCalledWith(
+      3,
+      "pnpm",
+      ["install", "--frozen-lockfile"],
+      { cwd: "/tmp/evolvo" },
+      expect.any(Function),
+    );
     expect(execFileMock).toHaveBeenNthCalledWith(4, "pnpm", ["build"], { cwd: "/tmp/evolvo" }, expect.any(Function));
     const spawnCall = spawnMock.mock.calls[0];
     expect(spawnCall?.[0]).toBe("pnpm");
@@ -143,6 +149,33 @@ describe("runPostMergeSelfRestart", () => {
 
     await expect(runPostMergeSelfRestart("/tmp/evolvo")).rejects.toThrow(
       "Post-merge restart step failed: git checkout release. Output: checkout failed",
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces frozen-lockfile install failures with the exact restart step", async () => {
+    execFileMock
+      .mockImplementationOnce(
+        (_command: string, _args: string[], _options: unknown, callback: (error: unknown, stdout: string, stderr: string) => void) => {
+          callback(null, "", "");
+        },
+      )
+      .mockImplementationOnce(
+        (_command: string, _args: string[], _options: unknown, callback: (error: unknown, stdout: string, stderr: string) => void) => {
+          callback(null, "", "");
+        },
+      )
+      .mockImplementationOnce(
+        (_command: string, _args: string[], _options: unknown, callback: (error: unknown, stdout: string, stderr: string) => void) => {
+          const error = Object.assign(new Error("failed"), { stderr: "lockfile would be modified" });
+          callback(error, "", "lockfile would be modified");
+        },
+      );
+
+    const { runPostMergeSelfRestart } = await import("./selfRestart.js");
+
+    await expect(runPostMergeSelfRestart("/tmp/evolvo")).rejects.toThrow(
+      "Post-merge restart step failed: pnpm install --frozen-lockfile. Output: lockfile would be modified",
     );
     expect(spawnMock).not.toHaveBeenCalled();
   });
