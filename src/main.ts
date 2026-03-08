@@ -358,7 +358,7 @@ export async function main(): Promise<void> {
         ? {
           ok: true,
           action: "stopped",
-          message: `Project \`${projectRecord?.slug ?? stopResult.state.activeProjectSlug ?? "unknown"}\` will not be selected again until \`/startProject <project-name>\` is used.`,
+          message: `Project \`${projectRecord?.slug ?? stopResult.state.activeProjectSlug ?? "unknown"}\` will not be selected again until \`startProject <project-name>\` is used.`,
           ...(projectRecord
             ? {
               project: {
@@ -372,7 +372,7 @@ export async function main(): Promise<void> {
           ? {
             ok: true,
             action: "already-stopped",
-            message: `Project \`${projectRecord?.slug ?? stopResult.state.activeProjectSlug ?? "unknown"}\` is already halted. Use \`/startProject <project-name>\` to resume it later.`,
+            message: `Project \`${projectRecord?.slug ?? stopResult.state.activeProjectSlug ?? "unknown"}\` is already halted. Use \`startProject <project-name>\` to resume it later.`,
             ...(projectRecord
               ? {
                 project: {

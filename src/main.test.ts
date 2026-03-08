@@ -571,7 +571,7 @@ describe("main", () => {
     expect(stopDiscordGracefulShutdownListenerMock).toHaveBeenCalledTimes(1);
   });
 
-  it("routes /startProject requests through the create-or-resume project handler", async () => {
+  it("routes startProject requests through the create-or-resume project handler", async () => {
     const { main } = await import("./main.js");
 
     await main();
@@ -619,7 +619,7 @@ describe("main", () => {
     );
   });
 
-  it("routes /stopProject requests through the stop-project state handler", async () => {
+  it("routes stopProject requests through the stop-project state handler", async () => {
     readProjectRegistryMock.mockResolvedValueOnce({
       version: 1,
       projects: [
@@ -659,7 +659,7 @@ describe("main", () => {
     expect(result).toEqual({
       ok: true,
       action: "stopped",
-      message: "Project `habit-cli` will not be selected again until `/startProject <project-name>` is used.",
+      message: "Project `habit-cli` will not be selected again until `startProject <project-name>` is used.",
       project: {
         displayName: "Habit CLI",
         slug: "habit-cli",
@@ -983,7 +983,7 @@ describe("main", () => {
       .mockResolvedValueOnce({
         version: 1,
         source: "discord",
-        command: "/quit",
+        command: "quit after current task",
         mode: "after-current-task",
         messageId: "9901",
         requestedAt: "2026-03-08T10:06:00.000Z",
@@ -1001,7 +1001,7 @@ describe("main", () => {
       "[stopProject] project habit-cli is halted. Runtime remains online and is waiting for further operator instructions.",
     );
     expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
-      "Graceful shutdown via /quit is being enforced. Stopping before starting a new task.",
+      "Graceful shutdown via quit after current task is being enforced. Stopping before starting a new task.",
     );
   });
 
@@ -1912,7 +1912,7 @@ describe("main", () => {
     readGracefulShutdownRequestMock.mockResolvedValueOnce({
       version: 1,
       source: "discord",
-      command: "/quit",
+      command: "quit after current task",
       mode: "after-current-task",
       messageId: "9001",
       requestedAt: "2026-03-07T12:00:00.000Z",
@@ -1926,14 +1926,14 @@ describe("main", () => {
     expect(runCodingAgentMock).not.toHaveBeenCalled();
     expect(markGracefulShutdownRequestEnforcedMock).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
-      "Graceful shutdown requested via Discord /quit. Stopping before starting a new task. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
+      "Graceful shutdown requested via Discord quit after current task. Stopping before starting a new task. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
     );
     expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
-      "Graceful shutdown via /quit is being enforced. Stopping before starting a new task.",
+      "Graceful shutdown via quit after current task is being enforced. Stopping before starting a new task.",
     );
   });
 
-  it("finishes the current task and stops before selecting another issue after /quit is requested", async () => {
+  it("finishes the current task and stops before selecting another issue after quit after current task is requested", async () => {
     listOpenIssuesMock
       .mockResolvedValueOnce([
         { number: 301, title: "Current task", description: "finish this", state: "open", labels: [] },
@@ -1948,7 +1948,7 @@ describe("main", () => {
       .mockResolvedValueOnce({
         version: 1,
         source: "discord",
-        command: "/quit",
+        command: "quit after current task",
         mode: "after-current-task",
         messageId: "9002",
         requestedAt: "2026-03-07T12:05:00.000Z",
@@ -1964,14 +1964,14 @@ describe("main", () => {
     expect(markInProgressMock).not.toHaveBeenCalledWith(302);
     expect(markGracefulShutdownRequestEnforcedMock).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
-      "Graceful shutdown requested via Discord /quit. Current task completed. Stopping before starting another issue. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
+      "Graceful shutdown requested via Discord quit after current task. Current task completed. Stopping before starting another issue. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
     );
     expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
-      "Graceful shutdown via /quit is being enforced. Current task completed. Stopping before starting another issue.",
+      "Graceful shutdown via quit after current task is being enforced. Current task completed. Stopping before starting another issue.",
     );
   });
 
-  it("drains existing issues and suppresses planner replenishment after /quit after tasks", async () => {
+  it("drains existing issues and suppresses planner replenishment after quit after tasks", async () => {
     listOpenIssuesMock
       .mockResolvedValueOnce([
         { number: 401, title: "First queued task", description: "one", state: "open", labels: [] },
@@ -1984,7 +1984,7 @@ describe("main", () => {
     readGracefulShutdownRequestMock.mockResolvedValue({
       version: 1,
       source: "discord",
-      command: "/quit after tasks",
+      command: "quit after tasks",
       mode: "after-tasks",
       messageId: "9010",
       requestedAt: "2026-03-07T12:10:00.000Z",
@@ -2000,10 +2000,10 @@ describe("main", () => {
     expect(runPlannerAgentMock).not.toHaveBeenCalled();
     expect(markGracefulShutdownRequestEnforcedMock).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
-      "Graceful shutdown requested via Discord /quit after tasks. Queue-drain shutdown is active. Planning and replenishment are disabled, so no new work will be started. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
+      "Graceful shutdown requested via Discord quit after tasks. Queue-drain shutdown is active. Planning and replenishment are disabled, so no new work will be started. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
     );
     expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
-      "Graceful shutdown via /quit after tasks is being enforced. Queue-drain shutdown is active. Planning and replenishment are disabled, so no new work will be started.",
+      "Graceful shutdown via quit after tasks is being enforced. Queue-drain shutdown is active. Planning and replenishment are disabled, so no new work will be started.",
     );
   });
 
@@ -2011,7 +2011,7 @@ describe("main", () => {
     readGracefulShutdownRequestMock.mockResolvedValue({
       version: 1,
       source: "discord",
-      command: "/quit after tasks",
+      command: "quit after tasks",
       mode: "after-tasks",
       messageId: "9011",
       requestedAt: "2026-03-07T12:15:00.000Z",
@@ -2025,10 +2025,10 @@ describe("main", () => {
     expect(runCodingAgentMock).not.toHaveBeenCalled();
     expect(markGracefulShutdownRequestEnforcedMock).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
-      "Graceful shutdown requested via Discord /quit after tasks. Stopping before starting a new task. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
+      "Graceful shutdown requested via Discord quit after tasks. Stopping before starting a new task. Shutdown intent remains persisted so later restarts do not resume work unexpectedly.",
     );
     expect(notifyRuntimeQuittingInDiscordMock).toHaveBeenCalledWith(
-      "Graceful shutdown via /quit after tasks is being enforced. Stopping before starting a new task.",
+      "Graceful shutdown via quit after tasks is being enforced. Stopping before starting a new task.",
     );
   });
 

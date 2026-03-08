@@ -13,7 +13,7 @@ export type GracefulShutdownMode = "after-current-task" | "after-tasks";
 export type GracefulShutdownRequest = {
   version: typeof GRACEFUL_SHUTDOWN_REQUEST_VERSION;
   source: "discord";
-  command: "/quit" | "/quit after tasks";
+  command: "quit after current task" | "quit after tasks";
   mode: GracefulShutdownMode;
   messageId: string;
   requestedAt: string;
@@ -37,6 +37,34 @@ function normalizeMessageId(value: unknown): string | null {
   return value.trim();
 }
 
+function normalizeGracefulShutdownCommand(
+  command: unknown,
+  mode: unknown,
+): { command: GracefulShutdownRequest["command"]; mode: GracefulShutdownMode } | null {
+  if (command === "quit after tasks" || command === "/quit after tasks") {
+    return {
+      command: "quit after tasks",
+      mode: "after-tasks",
+    };
+  }
+
+  if (command === "quit after current task" || command === "quit" || command === "/quit") {
+    if (mode === "after-tasks") {
+      return {
+        command: "quit after tasks",
+        mode: "after-tasks",
+      };
+    }
+
+    return {
+      command: "quit after current task",
+      mode: "after-current-task",
+    };
+  }
+
+  return null;
+}
+
 function normalizeGracefulShutdownRequest(raw: unknown): GracefulShutdownRequest | null {
   if (typeof raw !== "object" || raw === null) {
     return null;
@@ -48,17 +76,9 @@ function normalizeGracefulShutdownRequest(raw: unknown): GracefulShutdownRequest
     return null;
   }
 
-  let command: GracefulShutdownRequest["command"] | null = null;
-  let mode: GracefulShutdownMode | null = null;
-  if (candidate.command === "/quit after tasks") {
-    command = "/quit after tasks";
-    mode = "after-tasks";
-  } else if (candidate.command === "/quit") {
-    command = "/quit";
-    mode = candidate.mode === "after-tasks" ? "after-tasks" : "after-current-task";
-  }
-
-  if (command === null || mode === null) {
+  // Accept legacy slash-prefixed values so upgrades preserve pending shutdown intent.
+  const normalizedCommand = normalizeGracefulShutdownCommand(candidate.command, candidate.mode);
+  if (normalizedCommand === null) {
     return null;
   }
 
@@ -71,8 +91,8 @@ function normalizeGracefulShutdownRequest(raw: unknown): GracefulShutdownRequest
   return {
     version: GRACEFUL_SHUTDOWN_REQUEST_VERSION,
     source: "discord",
-    command,
-    mode,
+    command: normalizedCommand.command,
+    mode: normalizedCommand.mode,
     messageId,
     requestedAt,
     enforcedAt,
@@ -211,7 +231,7 @@ export async function recordGracefulShutdownRequest(
   const request: GracefulShutdownRequest = {
     version: GRACEFUL_SHUTDOWN_REQUEST_VERSION,
     source: "discord",
-    command: mode === "after-tasks" ? "/quit after tasks" : "/quit",
+    command: mode === "after-tasks" ? "quit after tasks" : "quit after current task",
     mode,
     messageId,
     requestedAt,

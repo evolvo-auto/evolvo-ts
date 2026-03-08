@@ -45,7 +45,7 @@ describe("gracefulShutdown", () => {
       request: {
         version: 1,
         source: "discord",
-        command: "/quit",
+        command: "quit after current task",
         mode: "after-current-task",
         messageId: "9001",
         requestedAt: "2026-03-07T12:00:00.000Z",
@@ -71,7 +71,7 @@ describe("gracefulShutdown", () => {
     await expect(consumeGracefulShutdownRequest(workDir)).resolves.toEqual({
       version: 1,
       source: "discord",
-      command: "/quit",
+      command: "quit after current task",
       mode: "after-current-task",
       messageId: "9010",
       requestedAt: "2026-03-07T13:00:00.000Z",
@@ -95,7 +95,7 @@ describe("gracefulShutdown", () => {
       request: {
         version: 1,
         source: "discord",
-        command: "/quit after tasks",
+        command: "quit after tasks",
         mode: "after-tasks",
         messageId: "9050",
         requestedAt: "2026-03-07T13:30:00.000Z",
@@ -123,7 +123,7 @@ describe("gracefulShutdown", () => {
       request: {
         version: 1,
         source: "discord",
-        command: "/quit",
+        command: "quit after current task",
         mode: "after-current-task",
         messageId: "9055",
         requestedAt: "2026-03-07T13:35:00.000Z",
@@ -133,7 +133,7 @@ describe("gracefulShutdown", () => {
     await expect(readGracefulShutdownRequest(workDir)).resolves.toEqual({
       version: 1,
       source: "discord",
-      command: "/quit",
+      command: "quit after current task",
       mode: "after-current-task",
       messageId: "9055",
       requestedAt: "2026-03-07T13:35:00.000Z",
@@ -187,7 +187,7 @@ describe("gracefulShutdown", () => {
     );
   });
 
-  it("normalizes persisted graceful shutdown payloads", async () => {
+  it("normalizes persisted graceful shutdown payloads from legacy slash-prefixed commands", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     await recordGracefulShutdownRequest(workDir, { messageId: "seed-request" });
@@ -205,7 +205,7 @@ describe("gracefulShutdown", () => {
     await expect(readGracefulShutdownRequest(workDir)).resolves.toEqual({
       version: 1,
       source: "discord",
-      command: "/quit",
+      command: "quit after current task",
       mode: "after-current-task",
       messageId: "9200",
       requestedAt: "2026-03-07T15:00:00.000Z",
@@ -234,7 +234,7 @@ describe("gracefulShutdown", () => {
       request: {
         version: 1,
         source: "discord",
-        command: "/quit",
+        command: "quit after current task",
         mode: "after-current-task",
         messageId: "9300",
         requestedAt: "2026-03-07T17:00:00.000Z",

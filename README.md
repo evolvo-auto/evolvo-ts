@@ -40,6 +40,13 @@ When configured, if Evolvo reaches its cycle limit it posts a control prompt in 
 - `continue` -> extend cycle budget by `DISCORD_CYCLE_EXTENSION`
 - `quit` -> exit cleanly
 
+Outside the cycle-limit prompt, Discord operator control is explicit plain-text message polling, not Discord slash commands. Send normal channel messages such as:
+
+- `quit after current task`
+- `quit after tasks`
+- `startProject <project-name>`
+- `stopProject`
+
 If Discord vars are not configured, Evolvo does not attempt Discord and keeps existing non-Discord behavior.
 
 ## Startup Flow

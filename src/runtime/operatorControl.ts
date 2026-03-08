@@ -201,10 +201,10 @@ export function getDiscordControlConfigFromEnv(
 
 function parseOperatorDecision(content: string): "continue" | "quit" | null {
   const normalized = content.trim().toLowerCase();
-  if (normalized === "continue" || normalized === "/continue") {
+  if (normalized === "continue") {
     return "continue";
   }
-  if (normalized === "quit" || normalized === "/quit") {
+  if (normalized === "quit") {
     return "quit";
   }
 
@@ -215,15 +215,15 @@ function parseGracefulShutdownCommand(
   content: string,
 ): { command: GracefulShutdownRequest["command"]; mode: GracefulShutdownMode } | null {
   const normalized = content.trim().toLowerCase().replace(/\s+/g, " ");
-  if (normalized === "/quit after tasks") {
+  if (normalized === "quit after tasks") {
     return {
-      command: "/quit after tasks",
+      command: "quit after tasks",
       mode: "after-tasks",
     };
   }
-  if (normalized === "/quit") {
+  if (normalized === "quit after current task") {
     return {
-      command: "/quit",
+      command: "quit after current task",
       mode: "after-current-task",
     };
   }
@@ -232,7 +232,7 @@ function parseGracefulShutdownCommand(
 }
 
 function parseStartProjectName(content: string): string | null {
-  const match = content.match(/^\/startproject(?:\s+(.+))?$/i);
+  const match = content.match(/^startproject(?:\s+(.+))?$/i);
   if (!match) {
     return null;
   }
@@ -241,7 +241,7 @@ function parseStartProjectName(content: string): string | null {
 }
 
 function parseStopProjectCommand(content: string): string | null {
-  const match = content.match(/^\/stopproject(?:\s+(.+))?$/i);
+  const match = content.match(/^stopproject(?:\s+(.+))?$/i);
   if (!match) {
     return null;
   }
@@ -314,7 +314,7 @@ async function sendCycleLimitPrompt(
 ): Promise<{ id: string }> {
   const content = [
     `<@${config.operatorUserId}> Evolvo has reached its cycle limit (${currentLimit}).`,
-    `Reply in this channel with \`continue\` to add ${config.cycleExtension} more cycles, or \`quit\` / \`/quit\` to stop.`,
+    `Reply in this channel with \`continue\` to add ${config.cycleExtension} more cycles, or \`quit\` to stop.`,
   ].join("\n");
 
   return fetchDiscordJson<{ id: string }>(config, `/channels/${config.controlChannelId}/messages`, {
@@ -327,7 +327,9 @@ async function sendStartupBootMessage(config: DiscordControlConfig): Promise<voi
   const startedAt = new Date().toISOString();
   const content = [
     "🤖 Evolvo runtime booted.",
-    "Operator control is online for cycle-limit decisions, graceful shutdown (`/quit`, `/quit after tasks`), project start (`/startProject`), and project stop (`/stopProject`) requests.",
+    "Operator control is online in plain-text mode.",
+    "Send `quit after current task`, `quit after tasks`, `startProject <project-name>`, or `stopProject` as normal channel messages.",
+    "When Evolvo posts a cycle-limit prompt, reply with `continue` or `quit`.",
     `Started at: ${startedAt}`,
   ].join("\n");
 
@@ -438,7 +440,7 @@ async function sendStartProjectAcknowledgement(
     ? [
       `<@${config.operatorUserId}> Could not queue project start request for \`${request.displayName}\`.`,
       result.message,
-      "Usage: `/startProject <project-name>`",
+      "Usage: `startProject <project-name>`",
     ].join("\n")
     : result.action === "created"
       ? [
@@ -474,7 +476,7 @@ async function sendStopProjectAcknowledgement(
     ? [
       `<@${config.operatorUserId}> Could not stop the current project.`,
       result.message,
-      "Usage: `/stopProject`",
+      "Usage: `stopProject`",
     ].join("\n")
     : result.action === "stopped"
       ? [
@@ -742,110 +744,111 @@ export async function pollDiscordGracefulShutdownCommand(
         continue;
       }
 
-      if (message.author?.id === config.operatorUserId) {
-        const shutdownCommand = parseGracefulShutdownCommand(message.content);
-        if (shutdownCommand !== null) {
-          const recordedRequest = await recordGracefulShutdownRequest(workDir, {
-            messageId: message.id,
-            mode: shutdownCommand.mode,
+      const shutdownCommand = parseGracefulShutdownCommand(message.content);
+      if (shutdownCommand !== null) {
+        const recordedRequest = await recordGracefulShutdownRequest(workDir, {
+          messageId: message.id,
+          mode: shutdownCommand.mode,
+        });
+        gracefulShutdownRequest = recordedRequest.request;
+        try {
+          await sendGracefulShutdownAcknowledgement(config, recordedRequest.request, {
+            created: recordedRequest.created,
+            requestedCommand: shutdownCommand.command,
           });
-          gracefulShutdownRequest = recordedRequest.request;
+        } catch (error) {
+          const sendMessage = buildStepFailureMessage("send-quit-ack", error);
+          console.error(`Discord graceful shutdown acknowledgement failed: ${sendMessage}`);
+          logDiscordMissingAccessHint(sendMessage);
+        }
+        continue;
+      }
+
+      const stopProjectCommandSuffix = parseStopProjectCommand(message.content);
+      if (stopProjectCommandSuffix !== null && handlers.onStopProject) {
+        const recordedReceipt = await recordDiscordControlCommandReceipt(workDir, {
+          command: "stop-project",
+          messageId: message.id,
+        });
+        if (recordedReceipt) {
+          let commandResult: StopProjectCommandResult;
+
           try {
-            await sendGracefulShutdownAcknowledgement(config, recordedRequest.request, {
-              created: recordedRequest.created,
-              requestedCommand: shutdownCommand.command,
+            if (stopProjectCommandSuffix.length > 0) {
+              throw new Error("`stopProject` does not take any arguments.");
+            }
+
+            commandResult = await handlers.onStopProject({
+              messageId: message.id,
+              requestedAt: new Date().toISOString(),
+              requestedBy: `discord:${config.operatorUserId}`,
             });
           } catch (error) {
-            const sendMessage = buildStepFailureMessage("send-quit-ack", error);
-            console.error(`Discord graceful shutdown acknowledgement failed: ${sendMessage}`);
+            commandResult = {
+              ok: false,
+              message: error instanceof Error ? error.message : "Unknown project stop request error.",
+            };
+          }
+
+          try {
+            await sendStopProjectAcknowledgement(config, commandResult);
+          } catch (error) {
+            const sendMessage = buildStepFailureMessage("send-stop-project-ack", error);
+            console.error(`Discord project stop acknowledgement failed: ${sendMessage}`);
             logDiscordMissingAccessHint(sendMessage);
           }
-        } else {
-          const stopProjectCommandSuffix = parseStopProjectCommand(message.content);
-          if (stopProjectCommandSuffix !== null && handlers.onStopProject) {
-            const recordedReceipt = await recordDiscordControlCommandReceipt(workDir, {
-              command: "stop-project",
+        }
+
+        continue;
+      }
+
+      const requestedProjectName = parseStartProjectName(message.content);
+      if (requestedProjectName !== null && handlers.onStartProject) {
+        const recordedReceipt = await recordDiscordControlCommandReceipt(workDir, {
+          command: "start-project",
+          messageId: message.id,
+        });
+        if (recordedReceipt) {
+          let startProjectRequest: StartProjectCommandRequest | null = null;
+          let commandResult: StartProjectCommandResult;
+
+          try {
+            const normalized = normalizeProjectNameInput(requestedProjectName);
+            startProjectRequest = {
               messageId: message.id,
-            });
-            if (recordedReceipt) {
-              let commandResult: StopProjectCommandResult;
-
-              try {
-                if (stopProjectCommandSuffix.length > 0) {
-                  throw new Error("`/stopProject` does not take any arguments.");
-                }
-
-                commandResult = await handlers.onStopProject({
-                  messageId: message.id,
-                  requestedAt: new Date().toISOString(),
-                  requestedBy: `discord:${config.operatorUserId}`,
-                });
-              } catch (error) {
-                commandResult = {
-                  ok: false,
-                  message: error instanceof Error ? error.message : "Unknown project stop request error.",
-                };
-              }
-
-              try {
-                await sendStopProjectAcknowledgement(config, commandResult);
-              } catch (error) {
-                const sendMessage = buildStepFailureMessage("send-stop-project-ack", error);
-                console.error(`Discord project stop acknowledgement failed: ${sendMessage}`);
-                logDiscordMissingAccessHint(sendMessage);
-              }
-            }
-          } else {
-          const requestedProjectName = parseStartProjectName(message.content);
-          if (requestedProjectName !== null && handlers.onStartProject) {
-            const recordedReceipt = await recordDiscordControlCommandReceipt(workDir, {
-              command: "start-project",
+              requestedAt: new Date().toISOString(),
+              requestedBy: `discord:${config.operatorUserId}`,
+              displayName: normalized.displayName,
+              slug: normalized.slug,
+              repositoryName: normalized.repositoryName,
+              issueLabel: normalized.issueLabel,
+              workspaceRelativePath: normalized.workspaceRelativePath,
+            };
+            commandResult = await handlers.onStartProject(startProjectRequest);
+          } catch (error) {
+            const fallbackDisplayName = requestedProjectName.trim() || "<missing project name>";
+            startProjectRequest = {
               messageId: message.id,
-            });
-            if (recordedReceipt) {
-              let startProjectRequest: StartProjectCommandRequest | null = null;
-              let commandResult: StartProjectCommandResult;
-
-              try {
-                const normalized = normalizeProjectNameInput(requestedProjectName);
-                startProjectRequest = {
-                  messageId: message.id,
-                  requestedAt: new Date().toISOString(),
-                  requestedBy: `discord:${config.operatorUserId}`,
-                  displayName: normalized.displayName,
-                  slug: normalized.slug,
-                  repositoryName: normalized.repositoryName,
-                  issueLabel: normalized.issueLabel,
-                  workspaceRelativePath: normalized.workspaceRelativePath,
-                };
-                commandResult = await handlers.onStartProject(startProjectRequest);
-              } catch (error) {
-                const fallbackDisplayName = requestedProjectName.trim() || "<missing project name>";
-                startProjectRequest = {
-                  messageId: message.id,
-                  requestedAt: new Date().toISOString(),
-                  requestedBy: `discord:${config.operatorUserId}`,
-                  displayName: fallbackDisplayName,
-                  slug: "",
-                  repositoryName: "",
-                  issueLabel: "",
-                  workspaceRelativePath: "",
-                };
-                commandResult = {
-                  ok: false,
-                  message: error instanceof Error ? error.message : "Unknown project start request error.",
-                };
-              }
-
-              try {
-                await sendStartProjectAcknowledgement(config, startProjectRequest, commandResult);
-              } catch (error) {
-                const sendMessage = buildStepFailureMessage("send-start-project-ack", error);
-                console.error(`Discord project start acknowledgement failed: ${sendMessage}`);
-                logDiscordMissingAccessHint(sendMessage);
-              }
-            }
+              requestedAt: new Date().toISOString(),
+              requestedBy: `discord:${config.operatorUserId}`,
+              displayName: fallbackDisplayName,
+              slug: "",
+              repositoryName: "",
+              issueLabel: "",
+              workspaceRelativePath: "",
+            };
+            commandResult = {
+              ok: false,
+              message: error instanceof Error ? error.message : "Unknown project start request error.",
+            };
           }
+
+          try {
+            await sendStartProjectAcknowledgement(config, startProjectRequest, commandResult);
+          } catch (error) {
+            const sendMessage = buildStepFailureMessage("send-start-project-ack", error);
+            console.error(`Discord project start acknowledgement failed: ${sendMessage}`);
+            logDiscordMissingAccessHint(sendMessage);
           }
         }
       }

@@ -635,7 +635,7 @@ export function buildProjectProvisioningOutcomeComment(
   if (!result.ok) {
     lines.push(`- Failure step: \`${result.failureStep ?? "unknown"}\``);
     lines.push(`- Error: ${result.message}`);
-    lines.push("- Recovery: inspect `.evolvo/projects.json`, fix the failing step, then resend `/startProject <project-name>` to requeue provisioning.");
+    lines.push("- Recovery: inspect `.evolvo/projects.json`, fix the failing step, then resend `startProject <project-name>` to requeue provisioning.");
   }
 
   return lines.join("\n");

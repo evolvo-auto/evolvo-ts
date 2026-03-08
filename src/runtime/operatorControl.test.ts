@@ -116,7 +116,7 @@ describe("operatorControl", () => {
       "https://discord.com/api/v10/channels/channel-1/messages",
       expect.objectContaining({
         method: "POST",
-        body: expect.stringContaining("graceful shutdown"),
+        body: expect.stringContaining("plain-text mode"),
       }),
     );
   });
@@ -415,7 +415,7 @@ describe("operatorControl", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 
-  it("returns quit when operator replies /quit", async () => {
+  it("returns quit when operator replies quit", async () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
     vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
     vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
@@ -432,7 +432,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "5001", content: "/quit", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "5001", content: "quit", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       );
@@ -587,7 +587,7 @@ describe("operatorControl", () => {
     );
   });
 
-  it("records and acknowledges an authorized /quit graceful shutdown command", async () => {
+  it("records and acknowledges an authorized quit after current task graceful shutdown command", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -601,7 +601,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7001", content: "/quit", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "7001", content: "quit after current task", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
@@ -613,7 +613,7 @@ describe("operatorControl", () => {
     expect(request).toEqual({
       version: 1,
       source: "discord",
-      command: "/quit",
+      command: "quit after current task",
       mode: "after-current-task",
       messageId: "7001",
       requestedAt: expect.any(String),
@@ -626,13 +626,13 @@ describe("operatorControl", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          content: "<@operator-1> Confirmed: `/quit` is now active.\nEvolvo will finish the current task and then stop before starting another issue.",
+          content: "<@operator-1> Confirmed: `quit after current task` is now active.\nEvolvo will finish the current task and then stop before starting another issue.",
         }),
       }),
     );
   });
 
-  it("confirms the active shutdown plan when /quit is repeated after a queue-drain request already exists", async () => {
+  it("confirms the active shutdown plan when quit after current task is repeated after a queue-drain request already exists", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -650,7 +650,7 @@ describe("operatorControl", () => {
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "8000", content: "/quit", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "8000", content: "quit after current task", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
@@ -662,7 +662,7 @@ describe("operatorControl", () => {
     expect(request).toEqual({
       version: 1,
       source: "discord",
-      command: "/quit after tasks",
+      command: "quit after tasks",
       mode: "after-tasks",
       messageId: "7999",
       requestedAt: "2026-03-08T09:00:00.000Z",
@@ -674,13 +674,13 @@ describe("operatorControl", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          content: "<@operator-1> Confirmed: `/quit after tasks` was already active, so the new command did not change the shutdown plan.\nEvolvo will finish the current actionable queue, will not plan or create new work, and will stop once the queue is drained.",
+          content: "<@operator-1> Confirmed: `quit after tasks` was already active, so the new command did not change the shutdown plan.\nEvolvo will finish the current actionable queue, will not plan or create new work, and will stop once the queue is drained.",
         }),
       }),
     );
   });
 
-  it("records and acknowledges an authorized /quit after tasks queue-drain command", async () => {
+  it("records and acknowledges an authorized quit after tasks queue-drain command", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -694,7 +694,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7051", content: "/quit   after   tasks", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "7051", content: "quit   after   tasks", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
@@ -706,7 +706,7 @@ describe("operatorControl", () => {
     expect(request).toEqual({
       version: 1,
       source: "discord",
-      command: "/quit after tasks",
+      command: "quit after tasks",
       mode: "after-tasks",
       messageId: "7051",
       requestedAt: expect.any(String),
@@ -719,7 +719,7 @@ describe("operatorControl", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          content: "<@operator-1> Confirmed: `/quit after tasks` is now active.\nEvolvo will finish the current actionable queue, will not plan or create new work, and will stop once the queue is drained.",
+          content: "<@operator-1> Confirmed: `quit after tasks` is now active.\nEvolvo will finish the current actionable queue, will not plan or create new work, and will stop once the queue is drained.",
         }),
       }),
     );
@@ -742,7 +742,7 @@ describe("operatorControl", () => {
         new Response(
           JSON.stringify([
             createDiscordControlMessage(7060, "noise"),
-            createDiscordControlMessage(7061, "/quit", "operator-1"),
+            createDiscordControlMessage(7061, "quit after current task", "operator-1"),
           ]),
           { status: 200 },
         ),
@@ -755,7 +755,7 @@ describe("operatorControl", () => {
     expect(request).toEqual({
       version: 1,
       source: "discord",
-      command: "/quit",
+      command: "quit after current task",
       mode: "after-current-task",
       messageId: "7061",
       requestedAt: expect.any(String),
@@ -789,7 +789,7 @@ describe("operatorControl", () => {
     const secondPage = Array.from({ length: 10 }, (_, index) => {
       const id = 9051 + index;
       if (id === 9058) {
-        return createDiscordControlMessage(id, "/quit", "operator-1");
+        return createDiscordControlMessage(id, "quit after current task", "operator-1");
       }
 
       return createDiscordControlMessage(id, `noise-${id}`);
@@ -805,7 +805,7 @@ describe("operatorControl", () => {
     expect(request).toEqual({
       version: 1,
       source: "discord",
-      command: "/quit",
+      command: "quit after current task",
       mode: "after-current-task",
       messageId: "9058",
       requestedAt: expect.any(String),
@@ -858,8 +858,8 @@ describe("operatorControl", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
-            createDiscordControlMessage(9401, "/quit", "operator-1"),
-            createDiscordControlMessage(9402, "/startProject Habit CLI", "operator-1"),
+            createDiscordControlMessage(9401, "quit after current task", "operator-1"),
+            createDiscordControlMessage(9402, "startProject Habit CLI", "operator-1"),
           ]),
           { status: 200 },
         ),
@@ -868,8 +868,8 @@ describe("operatorControl", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
-            createDiscordControlMessage(9401, "/quit", "operator-1"),
-            createDiscordControlMessage(9402, "/startProject Habit CLI", "operator-1"),
+            createDiscordControlMessage(9401, "quit after current task", "operator-1"),
+            createDiscordControlMessage(9402, "startProject Habit CLI", "operator-1"),
           ]),
           { status: 200 },
         ),
@@ -893,7 +893,7 @@ describe("operatorControl", () => {
     expect(replayedRequest).toEqual({
       version: 1,
       source: "discord",
-      command: "/quit",
+      command: "quit after current task",
       mode: "after-current-task",
       messageId: "9401",
       requestedAt: expect.any(String),
@@ -904,7 +904,7 @@ describe("operatorControl", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(5);
   });
 
-  it("queues an authorized /startProject request and acknowledges the created tracker issue", async () => {
+  it("queues an authorized startProject request and acknowledges the created tracker issue", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -935,7 +935,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7101", content: "/startProject Habit CLI", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "7101", content: "startProject Habit CLI", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
@@ -974,7 +974,7 @@ describe("operatorControl", () => {
     );
   });
 
-  it("acknowledges an authorized /startProject request by resuming an existing project", async () => {
+  it("acknowledges an authorized startProject request by resuming an existing project", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1001,7 +1001,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7151", content: "/startProject Habit CLI", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "7151", content: "startProject Habit CLI", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
@@ -1028,7 +1028,7 @@ describe("operatorControl", () => {
     );
   });
 
-  it("acknowledges an authorized /stopProject request and keeps the runtime online", async () => {
+  it("acknowledges an authorized stopProject request and keeps the runtime online", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1039,7 +1039,7 @@ describe("operatorControl", () => {
     const onStopProject = vi.fn().mockResolvedValue({
       ok: true,
       action: "stopped",
-      message: "Project `habit-cli` will not be selected again until `/startProject <project-name>` is used.",
+      message: "Project `habit-cli` will not be selected again until `startProject <project-name>` is used.",
       project: {
         displayName: "Habit CLI",
         slug: "habit-cli",
@@ -1051,7 +1051,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7161", content: "/stopProject", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "7161", content: "stopProject", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
@@ -1073,7 +1073,7 @@ describe("operatorControl", () => {
         body: JSON.stringify({
           content: [
             "<@operator-1> Stopped current project `Habit CLI`.",
-            "Project `habit-cli` will not be selected again until `/startProject <project-name>` is used.",
+            "Project `habit-cli` will not be selected again until `startProject <project-name>` is used.",
             "Runtime remains online and is waiting for further operator commands.",
           ].join("\n"),
         }),
@@ -1081,7 +1081,7 @@ describe("operatorControl", () => {
     );
   });
 
-  it("acknowledges invalid authorized /stopProject commands without calling the handler", async () => {
+  it("acknowledges invalid authorized stopProject commands without calling the handler", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1096,7 +1096,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7171", content: "/stopProject now", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "7171", content: "stopProject now", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
@@ -1114,15 +1114,15 @@ describe("operatorControl", () => {
         body: JSON.stringify({
           content: [
             "<@operator-1> Could not stop the current project.",
-            "`/stopProject` does not take any arguments.",
-            "Usage: `/stopProject`",
+            "`stopProject` does not take any arguments.",
+            "Usage: `stopProject`",
           ].join("\n"),
         }),
       }),
     );
   });
 
-  it("acknowledges invalid authorized /startProject commands without calling the handler", async () => {
+  it("acknowledges invalid authorized startProject commands without calling the handler", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1137,7 +1137,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7201", content: "/startProject", author: { id: "operator-1" } }]),
+          JSON.stringify([{ id: "7201", content: "startProject", author: { id: "operator-1" } }]),
           { status: 200 },
         ),
       )
@@ -1156,14 +1156,46 @@ describe("operatorControl", () => {
           content: [
             "<@operator-1> Could not queue project start request for `<missing project name>`.",
             "Project name is required.",
-            "Usage: `/startProject <project-name>`",
+            "Usage: `startProject <project-name>`",
           ].join("\n"),
         }),
       }),
     );
   });
 
-  it("ignores /quit messages from unauthorized users", async () => {
+  it("ignores slash-prefixed control messages from the authorized operator", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+    await gracefulShutdown.writeDiscordControlCursor(workDir, "8099");
+
+    const onStartProject = vi.fn();
+    const onStopProject = vi.fn();
+    const fetchSpy = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify([
+          createDiscordControlMessage(8100, "/quit", "operator-1"),
+          createDiscordControlMessage(8101, "/startProject Habit CLI", "operator-1"),
+          createDiscordControlMessage(8102, "/stopProject", "operator-1"),
+        ]),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const request = await pollDiscordGracefulShutdownCommand(workDir, { onStartProject, onStopProject });
+
+    expect(request).toBeNull();
+    expect(onStartProject).not.toHaveBeenCalled();
+    expect(onStopProject).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(await gracefulShutdown.readDiscordControlCursor(workDir)).toBe("8102");
+  });
+
+  it("ignores quit after current task messages from unauthorized users", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1177,7 +1209,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "8001", content: "/quit", author: { id: "intruder-1" } }]),
+          JSON.stringify([{ id: "8001", content: "quit after current task", author: { id: "intruder-1" } }]),
           { status: 200 },
         ),
       );
@@ -1189,7 +1221,7 @@ describe("operatorControl", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("ignores /quit after tasks messages from unauthorized users", async () => {
+  it("ignores quit after tasks messages from unauthorized users", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1203,7 +1235,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "8011", content: "/quit after tasks", author: { id: "intruder-1" } }]),
+          JSON.stringify([{ id: "8011", content: "quit after tasks", author: { id: "intruder-1" } }]),
           { status: 200 },
         ),
       );
@@ -1215,7 +1247,7 @@ describe("operatorControl", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("ignores /startProject messages from unauthorized users", async () => {
+  it("ignores startProject messages from unauthorized users", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1230,7 +1262,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7301", content: "/startProject Habit CLI", author: { id: "intruder-1" } }]),
+          JSON.stringify([{ id: "7301", content: "startProject Habit CLI", author: { id: "intruder-1" } }]),
           { status: 200 },
         ),
       );
@@ -1242,7 +1274,7 @@ describe("operatorControl", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("ignores /stopProject messages from unauthorized users", async () => {
+  it("ignores stopProject messages from unauthorized users", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
@@ -1257,7 +1289,7 @@ describe("operatorControl", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: "7311", content: "/stopProject", author: { id: "intruder-1" } }]),
+          JSON.stringify([{ id: "7311", content: "stopProject", author: { id: "intruder-1" } }]),
           { status: 200 },
         ),
       );

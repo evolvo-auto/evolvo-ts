@@ -6,7 +6,7 @@ Design a first-class Project system so Evolvo can keep using a single central is
 The target operator entrypoint is:
 
 ```text
-/startProject <project-name>
+startProject <project-name>
 ```
 
 This design covers the Project model, label-based routing, project state, repository/workspace provisioning, Discord integration, runtime implications, and failure handling. It does not implement the feature directly.
@@ -170,13 +170,13 @@ The runtime must stop assuming one global working directory:
 - `src/agents/runCodingAgent.ts` should run against a project-specific thread or thread factory, not a single long-lived global thread tied to one cwd.
 - runtime helpers that persist project-specific artifacts should receive a resolved project cwd when the work belongs to a managed project.
 
-## Recommended `/startProject <project-name>` Flow
+## Recommended `startProject <project-name>` Flow
 
 The safest design is issue-driven rather than performing full provisioning directly inside the Discord polling loop.
 
 Recommended flow:
 
-1. Authorized operator sends `/startProject <project-name>` in the control channel.
+1. Authorized operator sends `startProject <project-name>` in the control channel.
 2. Discord control validates and normalizes the requested name into a slug.
 3. Runtime creates a central tracker provisioning issue in the default Evolvo project.
    - title example: `Start project <display-name>`
@@ -281,7 +281,7 @@ Provisioning changes:
 1. Add a generic GitHub admin client/service for repo and label creation.
 2. Add project workspace preparation helpers.
 3. Add a provisioning issue type or metadata parser.
-4. Extend Discord operator control with `/startProject <project-name>`.
+4. Extend Discord operator control with `startProject <project-name>`.
 5. Persist provisioning progress/failure in `.evolvo/projects.json`.
 6. Add `.gitignore` coverage for `projects/`.
 
@@ -301,7 +301,7 @@ Phase 2: Provisioning pipeline
 - provisioning state transitions
 
 Phase 3: Operator workflow
-- `/startProject <project-name>` command parsing
+- `startProject <project-name>` command parsing
 - provisioning-issue creation
 - Discord acknowledgements and diagnostics
 - recovery/retry behavior for failed provisioning requests
@@ -313,4 +313,4 @@ To stay within the current max-five-open-issues queue limit, this design creates
 Created from this design:
 
 - `#317` project registry, label routing, and project-aware execution context
-- `#318` project provisioning pipeline and `/startProject <project-name>` operator flow
+- `#318` project provisioning pipeline and `startProject <project-name>` operator flow
