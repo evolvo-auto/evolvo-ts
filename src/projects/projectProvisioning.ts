@@ -164,14 +164,15 @@ async function ensureManagedProjectWorkspaceDirectory(workspacePath: string): Pr
 function buildManagedProjectRecord(
   metadata: ProjectProvisioningIssueMetadata,
   options: {
-    trackerOwner: string;
-    trackerRepo: string;
     issueNumber: number;
     now: string;
   },
   existing: ProjectRecord | null,
 ): ProjectRecord {
   const createdAt = existing?.createdAt ?? options.now;
+  const repositoryOwner = existing?.executionRepo.owner ?? metadata.owner;
+  const repositoryName = existing?.executionRepo.repo ?? metadata.repositoryName;
+  const repositoryUrl = existing?.executionRepo.url ?? buildRepositoryUrl(metadata.owner, metadata.repositoryName);
 
   return {
     slug: metadata.slug,
@@ -179,14 +180,14 @@ function buildManagedProjectRecord(
     kind: "managed",
     issueLabel: metadata.issueLabel,
     trackerRepo: {
-      owner: options.trackerOwner,
-      repo: options.trackerRepo,
-      url: buildRepositoryUrl(options.trackerOwner, options.trackerRepo),
+      owner: repositoryOwner,
+      repo: repositoryName,
+      url: repositoryUrl,
     },
     executionRepo: {
-      owner: existing?.executionRepo.owner ?? metadata.owner,
-      repo: existing?.executionRepo.repo ?? metadata.repositoryName,
-      url: existing?.executionRepo.url ?? buildRepositoryUrl(metadata.owner, metadata.repositoryName),
+      owner: repositoryOwner,
+      repo: repositoryName,
+      url: repositoryUrl,
       defaultBranch: existing?.executionRepo.defaultBranch ?? null,
     },
     cwd: metadata.workspacePath,
@@ -280,8 +281,19 @@ async function synchronizeManagedProjectWorkspace(options: {
   const { workspacePath, workspaceAction } = await ensureManagedProjectWorkspaceDirectory(
     resolveManagedProjectWorkspacePath(options.project.slug, options.workspaceRoot),
   );
+  const trackerRepo = {
+    owner: options.project.executionRepo.owner,
+    repo: options.project.executionRepo.repo,
+    url: options.project.executionRepo.url,
+  };
+  const trackerRepoReference = `${trackerRepo.owner}/${trackerRepo.repo}`;
+  const trackerRepoChanged =
+    options.project.trackerRepo.owner !== trackerRepo.owner
+    || options.project.trackerRepo.repo !== trackerRepo.repo
+    || options.project.trackerRepo.url !== trackerRepo.url;
   const nextProject: ProjectRecord = {
     ...options.project,
+    trackerRepo,
     cwd: workspacePath,
     updatedAt: new Date().toISOString(),
     provisioning: {
@@ -296,6 +308,11 @@ async function synchronizeManagedProjectWorkspace(options: {
       ? `[project-workspace] resolved ${workspacePath}; ${workspaceAction === "created" ? "created directory" : "reused existing directory"}; ${workspacePath} is now the active working directory for project ${options.project.slug}.`
       : `[project-workspace] resolved ${workspacePath}; ${workspaceAction === "created" ? "created directory" : "reused existing directory"}; ${workspacePath} is the canonical project workspace for ${options.project.slug}.`,
   );
+  if (trackerRepoChanged) {
+    console.log(
+      `[project-registry] corrected tracker repository for project ${options.project.slug}; projects.json now records ${trackerRepoReference}.`,
+    );
+  }
 
   return {
     project: nextProject,
@@ -566,8 +583,6 @@ export async function executeProjectProvisioningIssue(options: {
   const registry = await readProjectRegistry(options.workDir, defaultProject);
   const existingProject = findProjectBySlug(registry, metadata.slug);
   let record = buildManagedProjectRecord(metadata, {
-    trackerOwner: options.trackerOwner,
-    trackerRepo: options.trackerRepo,
     issueNumber: options.issue.number,
     now: new Date().toISOString(),
   }, existingProject);
@@ -643,6 +658,11 @@ export async function executeProjectProvisioningIssue(options: {
     });
     await persistRecord(
       {
+        trackerRepo: {
+          owner: repositoryMetadata.owner,
+          repo: repositoryMetadata.repo,
+          url: repositoryMetadata.url,
+        },
         executionRepo: {
           owner: repositoryMetadata.owner,
           repo: repositoryMetadata.repo,
@@ -651,6 +671,9 @@ export async function executeProjectProvisioningIssue(options: {
         },
       },
       { repoCreated: true },
+    );
+    console.log(
+      `[project-registry] project ${metadata.slug} repository created: ${repositoryMetadata.owner}/${repositoryMetadata.repo}; tracker repository written to projects.json: ${repositoryMetadata.owner}/${repositoryMetadata.repo}.`,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown managed repository provisioning error.";
