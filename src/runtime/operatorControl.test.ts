@@ -69,12 +69,18 @@ describe("operatorControl", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     await notifyIssueStartedInDiscord({
-      issueNumber: 298,
-      issueTitle: "Send Discord start embed",
-      issueUrl: "https://github.com/evolvo-auto/evolvo-ts/issues/298",
-      trackerRepository: "evolvo-auto/evolvo-ts",
-      executionProject: "Evolvo (`evolvo`)",
-      executionRepository: "evolvo-auto/evolvo-ts",
+      issue: {
+        number: 298,
+        title: "Send Discord start embed",
+      },
+      executionContext: {
+        trackerRepository: "evolvo-auto/evolvo-ts",
+        executionRepository: "evolvo-auto/evolvo-ts",
+        project: {
+          displayName: "Evolvo",
+          slug: "evolvo",
+        },
+      },
       lifecycleState: "selected -> executing",
     });
 
@@ -182,12 +188,18 @@ describe("operatorControl", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     await notifyIssueStartedInDiscord({
-      issueNumber: 298,
-      issueTitle: "Send a Discord embed notification with GitHub issue link when starting a new issue",
-      issueUrl: "https://github.com/evolvo-auto/evolvo-ts/issues/298",
-      trackerRepository: "evolvo-auto/evolvo-ts",
-      executionProject: "Evolvo (`evolvo`)",
-      executionRepository: "evolvo-auto/evolvo-ts",
+      issue: {
+        number: 298,
+        title: "Send a Discord embed notification with GitHub issue link when starting a new issue",
+      },
+      executionContext: {
+        trackerRepository: "evolvo-auto/evolvo-ts",
+        executionRepository: "evolvo-auto/evolvo-ts",
+        project: {
+          displayName: "Evolvo",
+          slug: "evolvo",
+        },
+      },
       lifecycleState: "selected -> executing",
     });
 
@@ -255,6 +267,73 @@ describe("operatorControl", () => {
     );
   });
 
+  it("renders honest unavailable values and omits the GitHub button when tracker data is missing", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
+    vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
+    vi.stubEnv("DISCORD_CONTROL_CHANNEL_ID", "channel-1");
+    vi.stubEnv("DISCORD_OPERATOR_USER_ID", "operator-1");
+
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "channel-1", guild_id: "guild-1" }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "message-1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await notifyIssueStartedInDiscord({
+      issue: {
+        number: 411,
+        title: "   ",
+      },
+      executionContext: {
+        trackerRepository: null,
+        executionRepository: " ",
+        project: null,
+      },
+      lifecycleState: null,
+    });
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "https://discord.com/api/v10/channels/channel-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: "<@operator-1>",
+          embeds: [
+            {
+              title: "Started Issue #411",
+              description: "unavailable",
+              fields: [
+                {
+                  name: "State",
+                  value: "unknown",
+                  inline: true,
+                },
+                {
+                  name: "Tracker Repository",
+                  value: "unknown",
+                  inline: true,
+                },
+                {
+                  name: "Execution Project",
+                  value: "unavailable",
+                  inline: true,
+                },
+                {
+                  name: "Execution Repository",
+                  value: "unknown",
+                  inline: true,
+                },
+              ],
+            },
+          ],
+          components: [],
+        }),
+      }),
+    );
+  });
+
   it("logs and swallows issue-start notification failures", async () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "bot-token");
     vi.stubEnv("DISCORD_CONTROL_GUILD_ID", "guild-1");
@@ -275,12 +354,18 @@ describe("operatorControl", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     await notifyIssueStartedInDiscord({
-      issueNumber: 298,
-      issueTitle: "Send Discord start embed",
-      issueUrl: "https://github.com/evolvo-auto/evolvo-ts/issues/298",
-      trackerRepository: "evolvo-auto/evolvo-ts",
-      executionProject: "Evolvo (`evolvo`)",
-      executionRepository: "evolvo-auto/evolvo-ts",
+      issue: {
+        number: 298,
+        title: "Send Discord start embed",
+      },
+      executionContext: {
+        trackerRepository: "evolvo-auto/evolvo-ts",
+        executionRepository: "evolvo-auto/evolvo-ts",
+        project: {
+          displayName: "Evolvo",
+          slug: "evolvo",
+        },
+      },
       lifecycleState: "selected -> executing",
     });
 

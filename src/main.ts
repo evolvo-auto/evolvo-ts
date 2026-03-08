@@ -71,7 +71,6 @@ import {
   PROJECT_ROUTING_BLOCKED_LABEL,
   buildProjectRoutingBlockedComment,
   resolveProjectExecutionContextForIssue,
-  type ProjectExecutionContext,
 } from "./projects/projectExecutionContext.js";
 import {
   buildDefaultProjectContext,
@@ -116,10 +115,6 @@ function mapReviewOutcomeToLifecycleState(reviewOutcome: string): "accepted" | "
   }
 
   return "rejected";
-}
-
-function buildExecutionProjectDisplay(context: ProjectExecutionContext): string {
-  return `${context.project.displayName} (\`${context.project.slug}\`)`;
 }
 
 async function transitionIssueLifecycleState(
@@ -243,7 +238,6 @@ export async function main(): Promise<void> {
   const githubClient = new GitHubClient(githubConfig);
   const issueManager = new TaskIssueManager(githubClient);
   const adminClient = new GitHubAdminClient(githubClient, githubConfig);
-  const repositoryName = `${GITHUB_OWNER}/${GITHUB_REPO}`;
   const defaultProjectContext = buildDefaultProjectContext({
     owner: GITHUB_OWNER,
     repo: GITHUB_REPO,
@@ -448,12 +442,18 @@ export async function main(): Promise<void> {
           if (startedThisCycle) {
             await addIssueLifecycleComment(issueManager, selectedIssue.number, buildIssueStartComment(selectedIssue, executionContext));
             await notifyIssueStartedInDiscord({
-              issueNumber: selectedIssue.number,
-              issueTitle: selectedIssue.title,
-              issueUrl: `https://github.com/${repositoryName}/issues/${selectedIssue.number}`,
-              trackerRepository: repositoryName,
-              executionProject: buildExecutionProjectDisplay(executionContext),
-              executionRepository: executionContext.executionRepository,
+              issue: {
+                number: selectedIssue.number,
+                title: selectedIssue.title,
+              },
+              executionContext: {
+                trackerRepository: executionContext.trackerRepository,
+                executionRepository: executionContext.executionRepository,
+                project: {
+                  displayName: executionContext.project.displayName,
+                  slug: executionContext.project.slug,
+                },
+              },
               lifecycleState: "selected -> executing",
             });
           }
