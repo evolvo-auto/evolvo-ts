@@ -1,27 +1,30 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const threadRunMock = vi.fn();
-const startThreadMock = vi.fn(() => ({
-  run: threadRunMock,
+const runPlannerOpenAiMock = vi.fn();
+
+vi.mock("../environment.js", () => ({
+  OPENAI_API_KEY: "planner-openai-key",
 }));
 
-vi.mock("@openai/codex-sdk", () => ({
-  Codex: class {
-    public startThread = startThreadMock;
-  },
+vi.mock("./plannerOpenAi.js", () => ({
+  runPlannerOpenAi: runPlannerOpenAiMock,
 }));
 
 describe("plannerAgent", () => {
   beforeEach(() => {
-    startThreadMock.mockClear();
-    threadRunMock.mockReset();
+    vi.resetModules();
+    runPlannerOpenAiMock.mockReset();
   });
 
-  it("uses Codex repo analysis and creates exact planned issues on startup", async () => {
-    threadRunMock.mockResolvedValueOnce({
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("uses direct OpenAI planner analysis and creates exact planned issues on startup", async () => {
+    runPlannerOpenAiMock.mockResolvedValueOnce({
       finalResponse: JSON.stringify({
         issues: [
           { title: "Stabilize lifecycle transition retries", description: "Tighten lifecycle transition retry behavior." },
@@ -49,12 +52,11 @@ describe("plannerAgent", () => {
     });
 
     expect(result.startupBootstrap).toBe(true);
-    expect(startThreadMock).toHaveBeenCalledWith(expect.objectContaining({
-      workingDirectory: "/tmp/evolvo",
-      sandboxMode: "read-only",
-      approvalPolicy: "never",
-      networkAccessEnabled: false,
-    }));
+    expect(runPlannerOpenAiMock).toHaveBeenCalledWith({
+      apiKey: "planner-openai-key",
+      prompt: expect.stringContaining("Inspect this repository and propose new GitHub issues for Evolvo."),
+      workDir: "/tmp/evolvo",
+    });
     expect(issueManager.listRecentClosedIssues).toHaveBeenCalledWith(300);
     expect(createPlannedIssuesMock).toHaveBeenCalledWith({
       minimumIssueCount: 3,
@@ -70,7 +72,7 @@ describe("plannerAgent", () => {
   });
 
   it("deduplicates repeated planner titles after follow-up normalization before creating issues", async () => {
-    threadRunMock.mockResolvedValueOnce({
+    runPlannerOpenAiMock.mockResolvedValueOnce({
       finalResponse: JSON.stringify({
         issues: [
           { title: "Harden planner duplicate filtering", description: "Use recent issue history to prevent repeats." },
@@ -78,7 +80,7 @@ describe("plannerAgent", () => {
             title: "Harden planner duplicate filtering (follow-up 1)",
             description: "This follow-up variant should also be ignored.",
           },
-          { title: "Improve Codex planner diagnostics", description: "Capture planner failures with clearer logs." },
+          { title: "Improve planner API diagnostics", description: "Capture planner failures with clearer logs." },
         ],
       }),
     });
@@ -104,13 +106,13 @@ describe("plannerAgent", () => {
       maximumOpenIssues: 5,
       issues: [
         { title: "Harden planner duplicate filtering", description: "Use recent issue history to prevent repeats." },
-        { title: "Improve Codex planner diagnostics", description: "Capture planner failures with clearer logs." },
+        { title: "Improve planner API diagnostics", description: "Capture planner failures with clearer logs." },
       ],
     });
   });
 
   it("deduplicates repeated closed-issue follow-ups before applying the 25-item prompt cap", async () => {
-    threadRunMock.mockResolvedValueOnce({
+    runPlannerOpenAiMock.mockResolvedValueOnce({
       finalResponse: JSON.stringify({ issues: [] }),
     });
     const createPlannedIssuesMock = vi.fn().mockResolvedValueOnce({ created: [] });
@@ -144,7 +146,7 @@ describe("plannerAgent", () => {
       workDir: "/tmp/evolvo",
     });
 
-    const plannerPrompt = threadRunMock.mock.calls[0]?.[0] as string;
+    const plannerPrompt = runPlannerOpenAiMock.mock.calls[0]?.[0]?.prompt as string;
     const recentlyClosedSection = plannerPrompt
       .split("Recently closed issues:\n")[1]
       ?.split("\n\nReturn only structured JSON matching the schema.")[0] ?? "";
@@ -162,7 +164,7 @@ describe("plannerAgent", () => {
   });
 
   it("skips malformed planner issue drafts and logs diagnostics", async () => {
-    threadRunMock.mockResolvedValueOnce({
+    runPlannerOpenAiMock.mockResolvedValueOnce({
       finalResponse: JSON.stringify({
         issues: [
           null,
@@ -209,7 +211,7 @@ describe("plannerAgent", () => {
 
   it("persists replenishment failure artifacts with planner prompt and raw final response", async () => {
     const rawFinalResponse = JSON.stringify({ result: [] });
-    threadRunMock.mockResolvedValueOnce({
+    runPlannerOpenAiMock.mockResolvedValueOnce({
       finalResponse: rawFinalResponse,
     });
     const createPlannedIssuesMock = vi.fn();
@@ -278,7 +280,7 @@ describe("plannerAgent", () => {
   });
 
   it("returns no created issues when planner analysis fails", async () => {
-    threadRunMock.mockRejectedValueOnce(new Error("planner failed"));
+    runPlannerOpenAiMock.mockRejectedValueOnce(new Error("planner failed"));
     const createPlannedIssuesMock = vi.fn();
     const issueManager = {
       listOpenIssues: vi.fn().mockResolvedValueOnce([]),

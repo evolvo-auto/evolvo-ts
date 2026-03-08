@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { Codex, type ThreadOptions } from "@openai/codex-sdk";
 import {
   PLANNED_ISSUE_RECENT_CLOSED_LOOKBACK_LIMIT,
   normalizePlannedIssueComparisonTitle,
@@ -7,7 +6,9 @@ import {
   type PlannedIssueDraft,
   type TaskIssueManager,
 } from "../issues/taskIssueManager.js";
+import { OPENAI_API_KEY } from "../environment.js";
 import { writeAtomicJsonState } from "../runtime/localStateFile.js";
+import { runPlannerOpenAi } from "./plannerOpenAi.js";
 
 export type PlannerAgentInput = {
   cycle: number;
@@ -22,35 +23,6 @@ export type PlannerAgentResult = {
   created: IssueSummary[];
   startupBootstrap: boolean;
 };
-
-const codex = new Codex();
-
-const PLANNER_THREAD_OPTIONS: Omit<ThreadOptions, "workingDirectory"> = {
-  sandboxMode: "read-only",
-  approvalPolicy: "never",
-  modelReasoningEffort: "medium",
-  networkAccessEnabled: false,
-};
-
-const PLANNER_OUTPUT_SCHEMA = {
-  type: "object",
-  properties: {
-    issues: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          description: { type: "string" },
-        },
-        required: ["title", "description"],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["issues"],
-  additionalProperties: false,
-} as const;
 
 type PlannerResponse = {
   issues: unknown[];
@@ -233,15 +205,13 @@ export async function runPlannerAgent(input: PlannerAgentInput): Promise<Planner
     const recentClosedIssues = await input.issueManager.listRecentClosedIssues(
       PLANNED_ISSUE_RECENT_CLOSED_LOOKBACK_LIMIT,
     );
-    const thread = codex.startThread({
-      ...PLANNER_THREAD_OPTIONS,
-      workingDirectory: input.workDir,
-    });
     plannerPrompt = buildPlannerPrompt(input, openIssues, recentClosedIssues);
-    const turn = await thread.run(plannerPrompt, {
-      outputSchema: PLANNER_OUTPUT_SCHEMA,
+    const plannerResult = await runPlannerOpenAi({
+      apiKey: OPENAI_API_KEY,
+      prompt: plannerPrompt,
+      workDir: input.workDir,
     });
-    plannerFinalResponse = turn.finalResponse;
+    plannerFinalResponse = plannerResult.finalResponse;
     const plannedIssues = parsePlannerResponse(plannerFinalResponse);
     const created = (
       await input.issueManager.createPlannedIssues({
