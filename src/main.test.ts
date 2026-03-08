@@ -13,8 +13,10 @@ const markCompletedMock = vi.fn();
 const addProgressCommentMock = vi.fn();
 const closeIssueMock = vi.fn();
 const runPostMergeSelfRestartMock = vi.fn();
+const readChallengeMetricsMock = vi.fn();
 const recordChallengeAttemptMetricsMock = vi.fn();
 const formatChallengeMetricsReportMock = vi.fn();
+const writeChallengeMetricsMock = vi.fn();
 const evaluateChallengeRetryEligibilityMock = vi.fn();
 const recordChallengeAttemptOutcomeMock = vi.fn();
 const persistChallengeAttemptArtifactMock = vi.fn();
@@ -126,8 +128,10 @@ vi.mock("./runtime/defaultBranch.js", () => ({
 }));
 
 vi.mock("./challenges/challengeMetrics.js", () => ({
+  readChallengeMetrics: readChallengeMetricsMock,
   recordChallengeAttemptMetrics: recordChallengeAttemptMetricsMock,
   formatChallengeMetricsReport: formatChallengeMetricsReportMock,
+  writeChallengeMetrics: writeChallengeMetricsMock,
 }));
 
 vi.mock("./challenges/retryGate.js", () => ({
@@ -350,6 +354,15 @@ describe("main", () => {
     addProgressCommentMock.mockResolvedValue({ ok: true, message: "commented" });
     closeIssueMock.mockReset();
     closeIssueMock.mockResolvedValue({ ok: true, message: "closed" });
+    readChallengeMetricsMock.mockReset();
+    readChallengeMetricsMock.mockResolvedValue({
+      total: 0,
+      success: 0,
+      failure: 0,
+      attemptsToSuccess: { total: 0, samples: 0, average: 0 },
+      categoryCounts: {},
+      pendingAttemptsByChallenge: {},
+    });
     recordChallengeAttemptMetricsMock.mockReset();
     recordChallengeAttemptMetricsMock.mockResolvedValue({
       total: 1,
@@ -361,6 +374,8 @@ describe("main", () => {
     });
     formatChallengeMetricsReportMock.mockReset();
     formatChallengeMetricsReportMock.mockReturnValue("## Challenge Metrics");
+    writeChallengeMetricsMock.mockReset();
+    writeChallengeMetricsMock.mockResolvedValue(undefined);
     evaluateChallengeRetryEligibilityMock.mockReset();
     evaluateChallengeRetryEligibilityMock.mockResolvedValue({
       eligible: true,
