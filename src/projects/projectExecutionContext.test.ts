@@ -14,6 +14,7 @@ import {
   upsertProjectRecord,
   type ProjectRecord,
 } from "./projectRegistry.js";
+import { createDefaultProjectWorkflow } from "./projectWorkflow.js";
 
 async function createTempWorkDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "project-execution-context-"));
@@ -58,6 +59,7 @@ function createManagedProject(workDir: string, overrides: Partial<ProjectRecord>
       workspacePrepared: true,
       lastError: null,
     },
+    workflow: createDefaultProjectWorkflow("evolvo-auto"),
     ...overrides,
   };
 }

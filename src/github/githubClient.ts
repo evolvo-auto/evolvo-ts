@@ -19,6 +19,13 @@ type RequestOptions = {
   body?: unknown;
 };
 
+type GraphqlResponse<T> = {
+  data?: T;
+  errors?: Array<{
+    message?: string;
+  }>;
+};
+
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RETRIES = 2;
@@ -103,6 +110,30 @@ export class GitHubClient {
 
   public async deleteApi(path: string): Promise<void> {
     await this.request<null>(`${this.apiBaseUrl}${path}`, { method: "DELETE" });
+  }
+
+  public async graphql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+    const response = await this.request<GraphqlResponse<T>>(`${this.apiBaseUrl}/graphql`, {
+      method: "POST",
+      body: {
+        query,
+        variables: variables ?? {},
+      },
+    });
+
+    if (Array.isArray(response.errors) && response.errors.length > 0) {
+      const message = response.errors
+        .map((error) => error.message?.trim())
+        .filter((message): message is string => Boolean(message))
+        .join("; ");
+      throw new Error(message || "GitHub GraphQL request failed.");
+    }
+
+    if (response.data === undefined) {
+      throw new Error("GitHub GraphQL response did not include data.");
+    }
+
+    return response.data;
   }
 
   private async request<T>(url: string, options: RequestOptions): Promise<T> {

@@ -15,6 +15,7 @@ import {
 import { getProjectRegistryPath, upsertProjectRecord } from "./projectRegistry.js";
 import { getActiveProjectStatePath } from "./activeProjectState.js";
 import { getActiveProjectsStatePath } from "./activeProjectsState.js";
+import { createDefaultProjectWorkflow } from "./projectWorkflow.js";
 
 async function createTempWorkDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "project-provisioning-"));
@@ -173,6 +174,7 @@ describe("projectProvisioning", () => {
           workspacePrepared: false,
           lastError: "workspace creation failed",
         },
+        workflow: createDefaultProjectWorkflow("evolvo-auto"),
       },
     );
     const issueManager = {
@@ -361,6 +363,7 @@ describe("projectProvisioning", () => {
           workspacePrepared: true,
           lastError: null,
         },
+        workflow: createDefaultProjectWorkflow("evolvo-auto"),
       },
     );
     const issueManager = {
@@ -459,6 +462,7 @@ describe("projectProvisioning", () => {
           workspacePrepared: false,
           lastError: "workspace failed",
         },
+        workflow: createDefaultProjectWorkflow("evolvo-auto"),
       },
     );
     const issueManager = {
@@ -552,6 +556,7 @@ describe("projectProvisioning", () => {
           workspacePrepared: false,
           lastError: "workspace failed",
         },
+        workflow: createDefaultProjectWorkflow("evolvo-auto"),
       },
     );
     const issueManager = {

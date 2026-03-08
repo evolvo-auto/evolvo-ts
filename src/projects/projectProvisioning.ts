@@ -21,6 +21,7 @@ import {
   type DefaultProjectContext,
   type ProjectRecord,
 } from "./projectRegistry.js";
+import { createDefaultProjectWorkflow } from "./projectWorkflow.js";
 
 type ProjectProvisioningIssueManager = Pick<TaskIssueManager, "createIssue" | "listOpenIssues">;
 
@@ -202,6 +203,7 @@ function buildManagedProjectRecord(
       workspacePrepared: existing?.provisioning.workspacePrepared ?? false,
       lastError: existing?.provisioning.lastError ?? null,
     },
+    workflow: existing?.workflow ?? createDefaultProjectWorkflow(repositoryOwner),
   };
 }
 

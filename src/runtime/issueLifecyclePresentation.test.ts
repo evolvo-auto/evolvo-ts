@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { CodingAgentRunResult } from "../agents/runCodingAgent.js";
 import type { IssueSummary, TaskIssueManager } from "../issues/taskIssueManager.js";
+import { createDefaultProjectWorkflow } from "../projects/projectWorkflow.js";
 import {
   addIssueLifecycleComment,
   buildMergeOutcomeComment,
@@ -92,6 +93,7 @@ describe("issueLifecyclePresentation", () => {
           workspacePrepared: true,
           lastError: null,
         },
+        workflow: createDefaultProjectWorkflow("evolvo-auto"),
       },
       trackerRepository: "evolvo-auto/evolvo-ts",
       executionRepository: "evolvo-auto/habit-cli",
@@ -136,6 +138,7 @@ describe("issueLifecyclePresentation", () => {
           workspacePrepared: true,
           lastError: null,
         },
+        workflow: createDefaultProjectWorkflow("evolvo-auto"),
       },
       trackerRepository: "evolvo-auto/evolvo-ts",
       executionRepository: "evolvo-auto/evolvo-ts",

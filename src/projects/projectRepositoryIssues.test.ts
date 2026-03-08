@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProjectRecord } from "./projectRegistry.js";
+import { createDefaultProjectWorkflow } from "./projectWorkflow.js";
 import {
   ProjectRepositoryIssueInspector,
   buildProjectRepositoryIssueInspectionLogLines,
@@ -33,6 +34,7 @@ function createProjectRecord(overrides: Partial<ProjectRecord> = {}): ProjectRec
       workspacePrepared: true,
       lastError: null,
     },
+    workflow: createDefaultProjectWorkflow("evolvo-auto"),
     ...overrides,
   };
 }

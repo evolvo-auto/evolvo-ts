@@ -1,6 +1,12 @@
 import { promises as fs } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { buildProjectIssueLabel, DEFAULT_PROJECT_SLUG } from "./projectNaming.js";
+import {
+  createDefaultProjectWorkflow,
+  normalizeProjectWorkflowStage,
+  type ProjectWorkflow,
+  type ProjectWorkflowStageOptionIds,
+} from "./projectWorkflow.js";
 
 const EVOLVO_DIRECTORY_NAME = ".evolvo";
 const PROJECT_REGISTRY_FILE_NAME = "projects.json";
@@ -35,6 +41,7 @@ export type ProjectRecord = {
     workspacePrepared: boolean;
     lastError: string | null;
   };
+  workflow: ProjectWorkflow;
 };
 
 export type ProjectRegistry = {
@@ -64,6 +71,48 @@ function normalizeBoolean(value: unknown): boolean {
 
 function normalizeNullableString(value: unknown): string | null {
   return normalizeNonEmptyString(value);
+}
+
+function normalizeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
+}
+
+function normalizeProjectWorkflowStageOptionIds(value: unknown): ProjectWorkflowStageOptionIds {
+  if (typeof value !== "object" || value === null) {
+    return {};
+  }
+
+  const optionIds: ProjectWorkflowStageOptionIds = {};
+  for (const [rawStage, rawOptionId] of Object.entries(value)) {
+    const stage = normalizeProjectWorkflowStage(rawStage);
+    const optionId = normalizeNullableString(rawOptionId);
+    if (!stage || !optionId) {
+      continue;
+    }
+
+    optionIds[stage] = optionId;
+  }
+
+  return optionIds;
+}
+
+function normalizeProjectWorkflow(value: unknown, boardOwner: string | null): ProjectWorkflow {
+  if (typeof value !== "object" || value === null) {
+    return createDefaultProjectWorkflow(boardOwner);
+  }
+
+  const candidate = value as Partial<ProjectWorkflow>;
+  return {
+    boardOwner: normalizeNullableString(candidate.boardOwner) ?? boardOwner,
+    boardNumber: normalizeInteger(candidate.boardNumber),
+    boardId: normalizeNullableString(candidate.boardId),
+    boardUrl: normalizeNullableString(candidate.boardUrl),
+    stageFieldId: normalizeNullableString(candidate.stageFieldId),
+    stageOptionIds: normalizeProjectWorkflowStageOptionIds(candidate.stageOptionIds),
+    boardProvisioned: candidate.boardProvisioned === true,
+    lastError: normalizeNullableString(candidate.lastError),
+    lastSyncedAt: normalizeNullableString(candidate.lastSyncedAt),
+  };
 }
 
 function buildRepositoryUrl(owner: string, repo: string): string {
@@ -138,6 +187,7 @@ export function buildDefaultProjectRecord(context: DefaultProjectContext): Proje
       workspacePrepared: true,
       lastError: null,
     },
+    workflow: createDefaultProjectWorkflow(normalizedContext.owner),
   };
 }
 
@@ -212,6 +262,7 @@ function normalizeProjectRecord(raw: unknown): ProjectRecord | null {
       workspacePrepared: normalizeBoolean(candidate.provisioning?.workspacePrepared),
       lastError: normalizeNullableString(candidate.provisioning?.lastError),
     },
+    workflow: normalizeProjectWorkflow(candidate.workflow, executionOwner),
   };
 }
 
@@ -233,6 +284,7 @@ function ensureDefaultProject(
       createdAt: existingDefault.createdAt,
       updatedAt: existingDefault.updatedAt,
       provisioning: existingDefault.provisioning,
+      workflow: existingDefault.workflow,
     },
     ...withoutDefault,
   ];

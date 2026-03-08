@@ -80,6 +80,47 @@ describe("GitHubClient", () => {
     );
   });
 
+  it("calls the GitHub GraphQL API and returns data payloads", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { viewer: { login: "evolvo-auto" } } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const client = createClient();
+
+    const result = await client.graphql<{ viewer: { login: string } }>(
+      "query Viewer { viewer { login } }",
+      { someVar: "value" },
+    );
+
+    expect(result).toEqual({ viewer: { login: "evolvo-auto" } });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/graphql",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          query: "query Viewer { viewer { login } }",
+          variables: { someVar: "value" },
+        }),
+      }),
+    );
+  });
+
+  it("surfaces GitHub GraphQL errors even when the HTTP request succeeds", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ errors: [{ message: "Project not found" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const client = createClient();
+
+    await expect(client.graphql("query Viewer { viewer { login } }")).rejects.toThrow("Project not found");
+  });
+
   it("throws GitHubApiError with API message", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ message: "Not Found" }), {

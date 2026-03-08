@@ -11,6 +11,7 @@ import {
   writeProjectRegistry,
   type ProjectRecord,
 } from "./projectRegistry.js";
+import { createDefaultProjectWorkflow } from "./projectWorkflow.js";
 
 async function createTempWorkDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "project-registry-"));
@@ -124,6 +125,7 @@ describe("projectRegistry", () => {
         workspacePrepared: true,
         lastError: null,
       },
+      workflow: createDefaultProjectWorkflow("evolvo-auto"),
     };
 
     const registry = await upsertProjectRecord(
@@ -221,6 +223,7 @@ describe("projectRegistry", () => {
         workspacePrepared: true,
         lastError: null,
       },
+      workflow: createDefaultProjectWorkflow("evolvo-auto"),
     };
     await mkdir(evolvoDir, { recursive: true });
     await writeFile(
