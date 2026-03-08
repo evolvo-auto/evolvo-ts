@@ -598,16 +598,21 @@ async function waitForOperatorDecision(
       config,
       `/channels/${config.controlChannelId}/messages?after=${afterId}&limit=50`,
     );
-    if (messages.length > 0) {
-      afterId = getHighestSnowflakeId(messages.map((message) => message.id));
-    }
 
-    const operatorMessage = messages.find((message) => message.author?.id === config.operatorUserId);
-    if (operatorMessage) {
+    const orderedMessages = [...messages].sort((left, right) => compareSnowflakeIds(left.id, right.id));
+    for (const operatorMessage of orderedMessages) {
+      if (operatorMessage.author?.id !== config.operatorUserId) {
+        continue;
+      }
+
       const decision = parseOperatorDecision(operatorMessage.content);
       if (decision) {
         return decision;
       }
+    }
+
+    if (orderedMessages.length > 0) {
+      afterId = orderedMessages[orderedMessages.length - 1]?.id ?? afterId;
     }
 
     await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
