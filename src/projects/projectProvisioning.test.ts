@@ -594,6 +594,18 @@ describe("projectProvisioning", () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const deployRepository = vi.fn().mockResolvedValue({
+      status: "skipped",
+      repository: "evolvo-auto/habit-cli",
+      deployableMarkerPresent: false,
+      vercelConfigured: false,
+      reason: "Repository description does not include <deployable>.",
+      logs: [
+        "[deploy] evaluating repository evolvo-auto/habit-cli for Vercel deployment.",
+        "[deploy] deployable marker present for evolvo-auto/habit-cli: no.",
+        "[deploy] deployment skipped for evolvo-auto/habit-cli: repository description is not marked with <deployable>.",
+      ],
+    });
     const issue = createProvisioningIssue(
       buildProjectProvisioningIssueBody({
         owner: "evolvo-auto",
@@ -609,10 +621,12 @@ describe("projectProvisioning", () => {
     const adminClient = {
       ensureLabel: vi.fn().mockResolvedValue(undefined),
       ensureRepository: vi.fn().mockResolvedValue({
+        id: 1001,
         owner: "evolvo-auto",
         repo: "habit-cli",
         url: "https://github.com/evolvo-auto/habit-cli",
         defaultBranch: "main",
+        description: "Managed by Evolvo for project Habit CLI.",
       }),
     };
 
@@ -623,6 +637,7 @@ describe("projectProvisioning", () => {
       trackerRepo: "evolvo-ts",
       adminClient,
       workspaceRoot: workDir,
+      deployRepository,
     });
 
     expect(isProjectProvisioningRequestIssue(issue)).toBe(true);
@@ -635,8 +650,17 @@ describe("projectProvisioning", () => {
       workspacePrepared: true,
       lastError: null,
     });
+    expect(result.deployment).toEqual({
+      status: "skipped",
+      repository: "evolvo-auto/habit-cli",
+      deployableMarkerPresent: false,
+      vercelConfigured: false,
+      reason: "Repository description does not include <deployable>.",
+      logs: expect.any(Array),
+    });
     expect(buildProjectProvisioningCompletionSummary(result)).toContain("Provisioned managed project `Habit CLI`.");
     expect(buildProjectProvisioningOutcomeComment(result)).toContain("- Outcome: succeeded.");
+    expect(buildProjectProvisioningOutcomeComment(result)).toContain("- Deployment: skipped for `evolvo-auto/habit-cli`.");
 
     const registry = JSON.parse(await readFile(getProjectRegistryPath(workDir), "utf8")) as {
       projects: Array<{ slug: string; status: string; provisioning: { repoCreated: boolean } }>;
@@ -663,6 +687,16 @@ describe("projectProvisioning", () => {
     expect(logSpy).toHaveBeenCalledWith(
       `[project-workspace] resolved ${createManagedWorkspacePath(workDir)}; created directory; ${createManagedWorkspacePath(workDir)} is now the active working directory for project habit-cli.`,
     );
+    expect(deployRepository).toHaveBeenCalledWith({
+      repository: {
+        id: 1001,
+        owner: "evolvo-auto",
+        repo: "habit-cli",
+        url: "https://github.com/evolvo-auto/habit-cli",
+        defaultBranch: "main",
+        description: "Managed by Evolvo for project Habit CLI.",
+      },
+    });
   });
 
   it("preserves partial success in failed registry state when workspace preparation fails", async () => {
@@ -684,10 +718,12 @@ describe("projectProvisioning", () => {
     const adminClient = {
       ensureLabel: vi.fn().mockResolvedValue(undefined),
       ensureRepository: vi.fn().mockResolvedValue({
+        id: 1001,
         owner: "evolvo-auto",
         repo: "habit-cli",
         url: "https://github.com/evolvo-auto/habit-cli",
         defaultBranch: "main",
+        description: "Managed by Evolvo for project Habit CLI.",
       }),
     };
 
@@ -737,5 +773,64 @@ describe("projectProvisioning", () => {
         },
       }),
     );
+  });
+
+  it("fails provisioning clearly when a deployable repository cannot be deployed", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const deployRepository = vi.fn().mockResolvedValue({
+      status: "failed",
+      repository: "evolvo-auto/habit-cli",
+      deployableMarkerPresent: true,
+      vercelConfigured: false,
+      reason: "Repository is marked <deployable> but Vercel configuration is missing: VERCEL_TOKEN.",
+      logs: [
+        "[deploy] evaluating repository evolvo-auto/habit-cli for Vercel deployment.",
+        "[deploy] deployable marker present for evolvo-auto/habit-cli: yes.",
+        "[deploy] Vercel configuration available for evolvo-auto/habit-cli: no.",
+      ],
+      project: null,
+      deployment: null,
+    });
+    const issue = createProvisioningIssue(
+      buildProjectProvisioningIssueBody({
+        owner: "evolvo-auto",
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        issueLabel: "project:habit-cli",
+        workspacePath: createManagedWorkspacePath(workDir),
+        requestedBy: "discord:operator-1",
+        requestedAt: "2026-03-07T12:00:00.000Z",
+      }),
+    );
+    const adminClient = {
+      ensureLabel: vi.fn().mockResolvedValue(undefined),
+      ensureRepository: vi.fn().mockResolvedValue({
+        id: 1001,
+        owner: "evolvo-auto",
+        repo: "habit-cli",
+        url: "https://github.com/evolvo-auto/habit-cli",
+        defaultBranch: "main",
+        description: "Managed by Evolvo for project Habit CLI. <deployable>",
+      }),
+    };
+
+    const result = await executeProjectProvisioningIssue({
+      issue,
+      workDir,
+      trackerOwner: "evolvo-auto",
+      trackerRepo: "evolvo-ts",
+      adminClient,
+      workspaceRoot: workDir,
+      deployRepository,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failureStep).toBe("deployment");
+    expect(result.record.status).toBe("failed");
+    expect(result.message).toContain("Repository is marked <deployable>");
+    expect(buildProjectProvisioningOutcomeComment(result)).toContain("- Deployment: failed for `evolvo-auto/habit-cli`.");
+    expect(buildProjectProvisioningOutcomeComment(result)).toContain("Vercel configuration is missing");
   });
 });

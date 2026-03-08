@@ -13,19 +13,23 @@ type GitHubLabelResponse = {
 };
 
 type GitHubRepositoryResponse = {
+  id?: unknown;
   name?: unknown;
   html_url?: unknown;
   default_branch?: unknown;
+  description?: unknown;
   owner?: {
     login?: unknown;
   };
 };
 
 export type GitHubAdminRepository = {
+  id: number | null;
   owner: string;
   repo: string;
   url: string;
   defaultBranch: string | null;
+  description: string | null;
 };
 
 export class GitHubAdminClient {
@@ -127,10 +131,12 @@ export class GitHubAdminClient {
     }
 
     return {
+      id: this.normalizeInteger(response.id),
       owner: repositoryOwner,
       repo: repositoryName,
       url: repositoryUrl,
       defaultBranch: this.normalizeNonEmptyString(response.default_branch),
+      description: this.normalizeNullableString(response.description),
     };
   }
 
@@ -166,5 +172,17 @@ export class GitHubAdminClient {
 
     const normalized = value.trim();
     return normalized.length > 0 ? normalized : null;
+  }
+
+  private normalizeNullableString(value: unknown): string | null {
+    return this.normalizeNonEmptyString(value);
+  }
+
+  private normalizeInteger(value: unknown): number | null {
+    if (typeof value !== "number" || !Number.isInteger(value)) {
+      return null;
+    }
+
+    return value;
   }
 }

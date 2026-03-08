@@ -6,6 +6,7 @@ import {
   parseProjectProvisioningIssueMetadata,
   type ProjectProvisioningIssueMetadata,
 } from "../issues/projectProvisioningIssue.js";
+import { deployProjectRepositoryWithVercel, type ProjectRepositoryDeploymentResult } from "../deployment/vercelDeployment.js";
 import type { IssueSummary, TaskIssueManager } from "../issues/taskIssueManager.js";
 import { setActiveProjectState } from "./activeProjectState.js";
 import {
@@ -35,10 +36,12 @@ export type ProjectProvisioningAdminClient = {
     repo: string;
     description?: string;
   }) => Promise<{
+    id: number | null;
     owner: string;
     repo: string;
     url: string;
     defaultBranch: string | null;
+    description: string | null;
   }>;
 };
 
@@ -100,8 +103,9 @@ export type ProjectProvisioningExecutionResult = {
   ok: boolean;
   metadata: ProjectProvisioningIssueMetadata;
   record: ProjectRecord;
-  failureStep: "registry" | "label" | "repository" | "workspace" | "active-project" | null;
+  failureStep: "registry" | "label" | "repository" | "workspace" | "deployment" | "active-project" | null;
   workspaceAction: "created" | "reused" | null;
+  deployment: ProjectRepositoryDeploymentResult | null;
   message: string;
 };
 
@@ -550,6 +554,7 @@ export async function executeProjectProvisioningIssue(options: {
   trackerRepo: string;
   adminClient: ProjectProvisioningAdminClient;
   workspaceRoot?: string;
+  deployRepository?: typeof deployProjectRepositoryWithVercel;
 }): Promise<ProjectProvisioningExecutionResult> {
   const parsedMetadata = parseProjectProvisioningIssueMetadata(options.issue.description);
   if (!parsedMetadata) {
@@ -567,6 +572,9 @@ export async function executeProjectProvisioningIssue(options: {
     now: new Date().toISOString(),
   }, existingProject);
   let workspaceAction: "created" | "reused" | null = null;
+  let deployment: ProjectRepositoryDeploymentResult | null = null;
+  let repositoryMetadata: Awaited<ReturnType<ProjectProvisioningAdminClient["ensureRepository"]>> | null = null;
+  const deployRepository = options.deployRepository ?? deployProjectRepositoryWithVercel;
 
   const persistRecord = async (
     overrides: Partial<ProjectRecord>,
@@ -600,6 +608,7 @@ export async function executeProjectProvisioningIssue(options: {
       record,
       failureStep: "registry",
       workspaceAction,
+      deployment,
       message: error instanceof Error ? error.message : "Unknown project registry error.",
     };
   }
@@ -621,12 +630,13 @@ export async function executeProjectProvisioningIssue(options: {
       record,
       failureStep: "label",
       workspaceAction,
+      deployment,
       message,
     };
   }
 
   try {
-    const repository = await options.adminClient.ensureRepository({
+    repositoryMetadata = await options.adminClient.ensureRepository({
       owner: metadata.owner,
       repo: metadata.repositoryName,
       description: `Managed by Evolvo for project ${metadata.displayName}.`,
@@ -634,10 +644,10 @@ export async function executeProjectProvisioningIssue(options: {
     await persistRecord(
       {
         executionRepo: {
-          owner: repository.owner,
-          repo: repository.repo,
-          url: repository.url,
-          defaultBranch: repository.defaultBranch,
+          owner: repositoryMetadata.owner,
+          repo: repositoryMetadata.repo,
+          url: repositoryMetadata.url,
+          defaultBranch: repositoryMetadata.defaultBranch,
         },
       },
       { repoCreated: true },
@@ -651,6 +661,7 @@ export async function executeProjectProvisioningIssue(options: {
       record,
       failureStep: "repository",
       workspaceAction,
+      deployment,
       message,
     };
   }
@@ -677,7 +688,47 @@ export async function executeProjectProvisioningIssue(options: {
       record,
       failureStep: "workspace",
       workspaceAction,
+      deployment,
       message,
+    };
+  }
+
+  try {
+    if (repositoryMetadata === null) {
+      throw new Error(`Repository metadata for ${metadata.owner}/${metadata.repositoryName} was unavailable for deployment evaluation.`);
+    }
+
+    deployment = await deployRepository({
+      repository: repositoryMetadata,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown Vercel deployment evaluation error.";
+    await persistRecord({ status: "failed" }, { lastError: message }).catch(() => undefined);
+    return {
+      ok: false,
+      metadata,
+      record,
+      failureStep: "deployment",
+      workspaceAction,
+      deployment,
+      message,
+    };
+  }
+
+  for (const logLine of deployment.logs) {
+    console.log(logLine);
+  }
+
+  if (deployment.status === "failed") {
+    await persistRecord({ status: "failed" }, { lastError: deployment.reason }).catch(() => undefined);
+    return {
+      ok: false,
+      metadata,
+      record,
+      failureStep: "deployment",
+      workspaceAction,
+      deployment,
+      message: deployment.reason,
     };
   }
 
@@ -700,6 +751,7 @@ export async function executeProjectProvisioningIssue(options: {
       record,
       failureStep: "active-project",
       workspaceAction,
+      deployment,
       message,
     };
   }
@@ -710,6 +762,7 @@ export async function executeProjectProvisioningIssue(options: {
     record,
     failureStep: null,
     workspaceAction,
+    deployment,
     message: `Provisioned project ${metadata.displayName}.`,
   };
 }
@@ -746,6 +799,26 @@ export function buildProjectProvisioningOutcomeComment(
     `- Registry status: \`${result.record.status}\``,
   ];
 
+  if (result.deployment) {
+    if (result.deployment.status === "skipped") {
+      lines.push(`- Deployment: skipped for \`${result.deployment.repository}\`.`);
+      lines.push(`- Deployment reason: ${result.deployment.reason}`);
+    } else if (result.deployment.status === "failed") {
+      lines.push(`- Deployment: failed for \`${result.deployment.repository}\`.`);
+      lines.push(`- Deployment reason: ${result.deployment.reason}`);
+      if (result.deployment.project) {
+        lines.push(`- Vercel project: ${result.deployment.project.action} \`${result.deployment.project.name}\`.`);
+      }
+      if (result.deployment.deployment?.url) {
+        lines.push(`- Deployment URL: ${result.deployment.deployment.url}`);
+      }
+    } else {
+      lines.push(`- Deployment: succeeded for \`${result.deployment.repository}\`.`);
+      lines.push(`- Vercel project: ${result.deployment.project.action} \`${result.deployment.project.name}\`.`);
+      lines.push(`- Deployment URL: ${result.deployment.deployment.url ?? `deployment ${result.deployment.deployment.id}`}`);
+    }
+  }
+
   if (!result.ok) {
     lines.push(`- Failure step: \`${result.failureStep ?? "unknown"}\``);
     lines.push(`- Error: ${result.message}`);
@@ -763,6 +836,9 @@ export function buildProjectProvisioningCompletionSummary(
     `Label: \`${result.metadata.issueLabel}\`.`,
     `Repository: ${result.record.executionRepo.url}.`,
     `Workspace: \`${result.record.cwd}\`.`,
+    ...(result.deployment?.status === "deployed"
+      ? [`Deployment: ${result.deployment.deployment.url ?? `deployment ${result.deployment.deployment.id}`}.`]
+      : []),
   ].join(" ");
 }
 

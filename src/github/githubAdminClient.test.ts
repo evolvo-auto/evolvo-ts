@@ -83,9 +83,11 @@ describe("GitHubAdminClient", () => {
   it("verifies and returns an existing managed repository", async () => {
     const client = createClientMock();
     client.getApi.mockResolvedValueOnce({
+      id: 1001,
       name: "habit-cli",
       html_url: "https://github.com/evolvo-auto/habit-cli",
       default_branch: "main",
+      description: "Habit CLI <deployable>",
       owner: {
         login: "evolvo-auto",
       },
@@ -103,10 +105,12 @@ describe("GitHubAdminClient", () => {
         repo: "habit-cli",
       }),
     ).resolves.toEqual({
+      id: 1001,
       owner: "evolvo-auto",
       repo: "habit-cli",
       url: "https://github.com/evolvo-auto/habit-cli",
       defaultBranch: "main",
+      description: "Habit CLI <deployable>",
     });
     expect(client.postApi).not.toHaveBeenCalled();
   });
@@ -148,10 +152,12 @@ describe("GitHubAdminClient", () => {
       }),
     );
     expect(result).toEqual({
+      id: null,
       owner: "evolvo-auto",
       repo: "habit-cli",
       url: "https://github.com/evolvo-auto/habit-cli",
       defaultBranch: "main",
+      description: null,
     });
   });
 });
