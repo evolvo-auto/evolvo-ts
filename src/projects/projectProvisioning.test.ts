@@ -9,9 +9,11 @@ import {
   buildProjectProvisioningOutcomeComment,
   createProjectProvisioningRequestIssue,
   executeProjectProvisioningIssue,
+  handleStartProjectCommand,
   isProjectProvisioningRequestIssue,
 } from "./projectProvisioning.js";
 import { getProjectRegistryPath, upsertProjectRecord } from "./projectRegistry.js";
+import { getActiveProjectStatePath } from "./activeProjectState.js";
 
 async function createTempWorkDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "project-provisioning-"));
@@ -254,6 +256,320 @@ describe("projectProvisioning", () => {
     );
   });
 
+  it("creates a missing project start flow and stores the requested project as active", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    const issueManager = {
+      listOpenIssues: vi.fn().mockResolvedValue([]),
+      createIssue: vi.fn().mockResolvedValue({
+        ok: true,
+        message: "Created issue #405.",
+        issue: {
+          number: 405,
+          title: "Start project Habit CLI",
+          description: "body",
+          state: "open",
+          labels: [],
+        },
+      }),
+    };
+
+    const result = await handleStartProjectCommand({
+      issueManager,
+      workDir,
+      trackerOwner: "evolvo-auto",
+      trackerRepo: "evolvo-ts",
+      projectName: "Habit CLI",
+      requestedBy: "discord:operator-1",
+      requestedAt: "2026-03-08T08:00:00.000Z",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      action: "created",
+      message: "Created provisioning issue #405 for project `habit-cli`.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        workspacePath: "projects/habit-cli",
+        status: "provisioning",
+      },
+      trackerIssue: {
+        number: 405,
+        url: "https://github.com/evolvo-auto/evolvo-ts/issues/405",
+        alreadyOpen: false,
+      },
+    });
+    expect(JSON.parse(await readFile(getActiveProjectStatePath(workDir), "utf8"))).toEqual({
+      version: 1,
+      activeProjectSlug: "habit-cli",
+      updatedAt: "2026-03-08T08:00:00.000Z",
+      requestedBy: "discord:operator-1",
+      source: "start-project-command",
+    });
+  });
+
+  it("resumes an existing active project without creating a new provisioning issue", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    await upsertProjectRecord(
+      workDir,
+      {
+        owner: "evolvo-auto",
+        repo: "evolvo-ts",
+        workDir,
+      },
+      {
+        slug: "habit-cli",
+        displayName: "Habit CLI",
+        kind: "managed",
+        issueLabel: "project:habit-cli",
+        trackerRepo: {
+          owner: "evolvo-auto",
+          repo: "evolvo-ts",
+          url: "https://github.com/evolvo-auto/evolvo-ts",
+        },
+        executionRepo: {
+          owner: "evolvo-auto",
+          repo: "habit-cli",
+          url: "https://github.com/evolvo-auto/habit-cli",
+          defaultBranch: "main",
+        },
+        cwd: resolve(workDir, "projects", "habit-cli"),
+        status: "active",
+        sourceIssueNumber: 318,
+        createdAt: "2026-03-07T12:00:00.000Z",
+        updatedAt: "2026-03-07T12:00:00.000Z",
+        provisioning: {
+          labelCreated: true,
+          repoCreated: true,
+          workspacePrepared: true,
+          lastError: null,
+        },
+      },
+    );
+    const issueManager = {
+      listOpenIssues: vi.fn().mockResolvedValue([]),
+      createIssue: vi.fn(),
+    };
+
+    const result = await handleStartProjectCommand({
+      issueManager,
+      workDir,
+      trackerOwner: "evolvo-auto",
+      trackerRepo: "evolvo-ts",
+      projectName: "Habit CLI",
+      requestedBy: "discord:operator-1",
+      requestedAt: "2026-03-08T08:05:00.000Z",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      action: "resumed",
+      message: "Resumed existing project `habit-cli`.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        repositoryUrl: "https://github.com/evolvo-auto/habit-cli",
+        workspacePath: resolve(workDir, "projects", "habit-cli"),
+        status: "active",
+      },
+    });
+    expect(issueManager.createIssue).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(getActiveProjectStatePath(workDir), "utf8"))).toEqual({
+      version: 1,
+      activeProjectSlug: "habit-cli",
+      updatedAt: "2026-03-08T08:05:00.000Z",
+      requestedBy: "discord:operator-1",
+      source: "start-project-command",
+    });
+  });
+
+  it("resumes a failed project by reusing its existing recovery issue", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    await upsertProjectRecord(
+      workDir,
+      {
+        owner: "evolvo-auto",
+        repo: "evolvo-ts",
+        workDir,
+      },
+      {
+        slug: "habit-cli",
+        displayName: "Habit CLI",
+        kind: "managed",
+        issueLabel: "project:habit-cli",
+        trackerRepo: {
+          owner: "evolvo-auto",
+          repo: "evolvo-ts",
+          url: "https://github.com/evolvo-auto/evolvo-ts",
+        },
+        executionRepo: {
+          owner: "evolvo-auto",
+          repo: "habit-cli",
+          url: "https://github.com/evolvo-auto/habit-cli",
+          defaultBranch: "main",
+        },
+        cwd: resolve(workDir, "projects", "habit-cli"),
+        status: "failed",
+        sourceIssueNumber: 318,
+        createdAt: "2026-03-07T12:00:00.000Z",
+        updatedAt: "2026-03-07T12:00:00.000Z",
+        provisioning: {
+          labelCreated: true,
+          repoCreated: true,
+          workspacePrepared: false,
+          lastError: "workspace failed",
+        },
+      },
+    );
+    const issueManager = {
+      listOpenIssues: vi.fn().mockResolvedValue([
+        {
+          number: 406,
+          title: "Start project Habit CLI",
+          description: buildProjectProvisioningIssueBody({
+            owner: "evolvo-auto",
+            displayName: "Habit CLI",
+            slug: "habit-cli",
+            repositoryName: "habit-cli",
+            issueLabel: "project:habit-cli",
+            workspaceRelativePath: "projects/habit-cli",
+            requestedBy: "discord:operator-1",
+            requestedAt: "2026-03-08T07:50:00.000Z",
+          }),
+          state: "open",
+          labels: [],
+        },
+      ]),
+      createIssue: vi.fn(),
+    };
+
+    const result = await handleStartProjectCommand({
+      issueManager,
+      workDir,
+      trackerOwner: "evolvo-auto",
+      trackerRepo: "evolvo-ts",
+      projectName: "Habit CLI",
+      requestedBy: "discord:operator-1",
+      requestedAt: "2026-03-08T08:10:00.000Z",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      action: "resumed",
+      message: "Resumed existing project `habit-cli` and kept recovery issue #406 active.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        repositoryUrl: "https://github.com/evolvo-auto/habit-cli",
+        workspacePath: resolve(workDir, "projects", "habit-cli"),
+        status: "failed",
+      },
+      trackerIssue: {
+        number: 406,
+        url: "https://github.com/evolvo-auto/evolvo-ts/issues/406",
+        alreadyOpen: true,
+      },
+    });
+    expect(issueManager.createIssue).not.toHaveBeenCalled();
+  });
+
+  it("resumes a failed project by queuing a recovery issue when none is open", async () => {
+    const workDir = await createTempWorkDir();
+    tempDirs.push(workDir);
+    await upsertProjectRecord(
+      workDir,
+      {
+        owner: "evolvo-auto",
+        repo: "evolvo-ts",
+        workDir,
+      },
+      {
+        slug: "habit-cli",
+        displayName: "Habit CLI",
+        kind: "managed",
+        issueLabel: "project:habit-cli",
+        trackerRepo: {
+          owner: "evolvo-auto",
+          repo: "evolvo-ts",
+          url: "https://github.com/evolvo-auto/evolvo-ts",
+        },
+        executionRepo: {
+          owner: "evolvo-auto",
+          repo: "habit-cli",
+          url: "https://github.com/evolvo-auto/habit-cli",
+          defaultBranch: "main",
+        },
+        cwd: resolve(workDir, "projects", "habit-cli"),
+        status: "failed",
+        sourceIssueNumber: 318,
+        createdAt: "2026-03-07T12:00:00.000Z",
+        updatedAt: "2026-03-07T12:00:00.000Z",
+        provisioning: {
+          labelCreated: true,
+          repoCreated: true,
+          workspacePrepared: false,
+          lastError: "workspace failed",
+        },
+      },
+    );
+    const issueManager = {
+      listOpenIssues: vi.fn().mockResolvedValue([]),
+      createIssue: vi.fn().mockResolvedValue({
+        ok: true,
+        message: "Created issue #407.",
+        issue: {
+          number: 407,
+          title: "Start project Habit CLI",
+          description: "body",
+          state: "open",
+          labels: [],
+        },
+      }),
+    };
+
+    const result = await handleStartProjectCommand({
+      issueManager,
+      workDir,
+      trackerOwner: "evolvo-auto",
+      trackerRepo: "evolvo-ts",
+      projectName: "Habit CLI",
+      requestedBy: "discord:operator-1",
+      requestedAt: "2026-03-08T08:15:00.000Z",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      action: "resumed",
+      message: "Resumed existing project `habit-cli` and queued recovery issue #407.",
+      project: {
+        displayName: "Habit CLI",
+        slug: "habit-cli",
+        repositoryName: "habit-cli",
+        repositoryUrl: "https://github.com/evolvo-auto/habit-cli",
+        workspacePath: resolve(workDir, "projects", "habit-cli"),
+        status: "failed",
+      },
+      trackerIssue: {
+        number: 407,
+        url: "https://github.com/evolvo-auto/evolvo-ts/issues/407",
+        alreadyOpen: false,
+      },
+    });
+    expect(JSON.parse(await readFile(getActiveProjectStatePath(workDir), "utf8"))).toEqual({
+      version: 1,
+      activeProjectSlug: "habit-cli",
+      updatedAt: "2026-03-08T08:15:00.000Z",
+      requestedBy: "discord:operator-1",
+      source: "start-project-command",
+    });
+  });
+
   it("provisions a managed project and records active registry state on success", async () => {
     const workDir = await createTempWorkDir();
     tempDirs.push(workDir);
@@ -314,6 +630,13 @@ describe("projectProvisioning", () => {
       }),
     );
     expect(resolve(workDir, "projects", "habit-cli")).toBe(result.record.cwd);
+    expect(JSON.parse(await readFile(getActiveProjectStatePath(workDir), "utf8"))).toEqual({
+      version: 1,
+      activeProjectSlug: "habit-cli",
+      updatedAt: expect.any(String),
+      requestedBy: "discord:operator-1",
+      source: "project-provisioning",
+    });
   });
 
   it("preserves partial success in failed registry state when workspace preparation fails", async () => {

@@ -69,10 +69,11 @@ import {
 import {
   buildProjectProvisioningCompletionSummary,
   buildProjectProvisioningOutcomeComment,
-  createProjectProvisioningRequestIssue,
   executeProjectProvisioningIssue,
+  handleStartProjectCommand,
   isProjectProvisioningRequestIssue,
 } from "./projects/projectProvisioning.js";
+import { readActiveProjectState } from "./projects/activeProjectState.js";
 import {
   PROJECT_ROUTING_BLOCKED_LABEL,
   buildProjectRoutingBlockedComment,
@@ -283,9 +284,10 @@ export async function main(): Promise<void> {
     repo: GITHUB_REPO,
     workDir: WORK_DIR,
   });
+  let activeProjectSlug = (await readActiveProjectState(WORK_DIR)).activeProjectSlug;
   const discordHandlers: DiscordControlHandlers = {
-    onStartProject: async (request) =>
-      createProjectProvisioningRequestIssue({
+    onStartProject: async (request) => {
+      const result = await handleStartProjectCommand({
         issueManager,
         workDir: WORK_DIR,
         trackerOwner: GITHUB_OWNER,
@@ -293,7 +295,19 @@ export async function main(): Promise<void> {
         projectName: request.displayName,
         requestedBy: request.requestedBy,
         requestedAt: request.requestedAt,
-      }),
+      });
+      if (result.ok) {
+        activeProjectSlug = result.project.slug;
+        console.log(
+          result.action === "created"
+            ? `[startProject] created new project flow for ${result.project.displayName} (${result.project.slug}).`
+            : `[startProject] resumed existing project ${result.project.displayName} (${result.project.slug}) with status ${result.project.status}.`,
+        );
+      } else {
+        console.error(`[startProject] failed for ${request.displayName}: ${result.message}`);
+      }
+      return result;
+    },
   };
 
   console.log(`Hello from ${GITHUB_OWNER}/${GITHUB_REPO}!`);
@@ -388,7 +402,9 @@ export async function main(): Promise<void> {
             return;
           }
 
-          const selectedIssue = selectIssueForWork(retryEligibleIssues);
+          const selectedIssue = selectIssueForWork(retryEligibleIssues, {
+            activeProjectSlug,
+          });
 
           if (!selectedIssue) {
             if (
@@ -549,6 +565,7 @@ export async function main(): Promise<void> {
             );
 
             if (provisioningResult.ok) {
+              activeProjectSlug = provisioningResult.record.slug;
               await transitionIssueLifecycleState(issueManager, {
                 issue: selectedIssue,
                 nextState: "accepted",

@@ -1,4 +1,5 @@
 import { generateStartupIssueTemplates } from "../issues/startupIssueBootstrap.js";
+import { parseProjectProvisioningIssueMetadata } from "../issues/projectProvisioningIssue.js";
 import type { TaskIssueManager, IssueSummary } from "../issues/taskIssueManager.js";
 import { GitHubApiError } from "../github/githubClient.js";
 import {
@@ -7,6 +8,7 @@ import {
   isChallengeIssue,
   isChallengeRetryReadyIssue,
 } from "../issues/challengeIssue.js";
+import { PROJECT_LABEL_PREFIX } from "../projects/projectNaming.js";
 
 const OUTDATED_LABELS = new Set(["outdated", "obsolete", "wontfix", "invalid", "duplicate"]);
 const MIN_REPLENISH_ISSUES = 3;
@@ -17,13 +19,12 @@ const RUN_LOOP_GITHUB_RETRY_MAX_DELAY_MS = 1_000;
 
 export const DEFAULT_PROMPT = "No open issues available. Create an issue first.";
 
-export function selectIssueForWork(issues: IssueSummary[]): IssueSummary | null {
-  const notCompleted = issues.filter((issue) => !hasIssueLabel(issue, "completed") && !hasIssueLabel(issue, "blocked"));
-  if (notCompleted.length === 0) {
+function selectHighestPriorityIssue(issues: IssueSummary[]): IssueSummary | null {
+  if (issues.length === 0) {
     return null;
   }
 
-  const challengeCandidates = notCompleted.filter((issue) => isChallengeIssue(issue));
+  const challengeCandidates = issues.filter((issue) => isChallengeIssue(issue));
   if (challengeCandidates.length > 0) {
     const inProgressChallenge = challengeCandidates.find((issue) => isChallengeInProgressIssue(issue));
     if (inProgressChallenge) {
@@ -38,8 +39,43 @@ export function selectIssueForWork(issues: IssueSummary[]): IssueSummary | null 
     return challengeCandidates[0] ?? null;
   }
 
-  const inProgress = notCompleted.find((issue) => hasIssueLabel(issue, "in progress"));
-  return inProgress ?? notCompleted[0] ?? null;
+  const inProgress = issues.find((issue) => hasIssueLabel(issue, "in progress"));
+  return inProgress ?? issues[0] ?? null;
+}
+
+function issueTargetsActiveProject(issue: IssueSummary, activeProjectSlug: string): boolean {
+  const normalizedSlug = activeProjectSlug.trim().toLowerCase();
+  if (!normalizedSlug) {
+    return false;
+  }
+
+  const provisioningSlug = parseProjectProvisioningIssueMetadata(issue.description)?.slug?.trim().toLowerCase();
+  if (provisioningSlug === normalizedSlug) {
+    return true;
+  }
+
+  return issue.labels.some((label) => label.trim().toLowerCase() === `${PROJECT_LABEL_PREFIX}${normalizedSlug}`);
+}
+
+export function selectIssueForWork(
+  issues: IssueSummary[],
+  options: { activeProjectSlug?: string | null } = {},
+): IssueSummary | null {
+  const notCompleted = issues.filter((issue) => !hasIssueLabel(issue, "completed") && !hasIssueLabel(issue, "blocked"));
+  if (notCompleted.length === 0) {
+    return null;
+  }
+
+  const activeProjectSlug = options.activeProjectSlug?.trim() || null;
+  if (activeProjectSlug) {
+    const activeProjectIssues = notCompleted.filter((issue) => issueTargetsActiveProject(issue, activeProjectSlug));
+    const prioritized = selectHighestPriorityIssue(activeProjectIssues);
+    if (prioritized) {
+      return prioritized;
+    }
+  }
+
+  return selectHighestPriorityIssue(notCompleted);
 }
 
 export function isOutdatedIssue(issue: IssueSummary): boolean {

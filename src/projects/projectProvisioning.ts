@@ -8,6 +8,7 @@ import {
   type ProjectProvisioningIssueMetadata,
 } from "../issues/projectProvisioningIssue.js";
 import type { IssueSummary, TaskIssueManager } from "../issues/taskIssueManager.js";
+import { setActiveProjectState } from "./activeProjectState.js";
 import { normalizeProjectNameInput } from "./projectNaming.js";
 import {
   findProjectBySlug,
@@ -52,16 +53,61 @@ export type CreateProjectProvisioningRequestResult =
     message: string;
   };
 
+export type StartProjectCommandHandlingResult =
+  | {
+    ok: true;
+    action: "created";
+    message: string;
+    project: {
+      displayName: string;
+      slug: string;
+      repositoryName: string;
+      workspacePath: string;
+      status: "provisioning";
+    };
+    trackerIssue: {
+      number: number;
+      url: string;
+      alreadyOpen: boolean;
+    };
+  }
+  | {
+    ok: true;
+    action: "resumed";
+    message: string;
+    project: {
+      displayName: string;
+      slug: string;
+      repositoryName: string;
+      repositoryUrl: string;
+      workspacePath: string;
+      status: ProjectRecord["status"];
+    };
+    trackerIssue?: {
+      number: number;
+      url: string;
+      alreadyOpen: boolean;
+    };
+  }
+  | {
+    ok: false;
+    message: string;
+  };
+
 export type ProjectProvisioningExecutionResult = {
   ok: boolean;
   metadata: ProjectProvisioningIssueMetadata;
   record: ProjectRecord;
-  failureStep: "registry" | "label" | "repository" | "workspace" | null;
+  failureStep: "registry" | "label" | "repository" | "workspace" | "active-project" | null;
   message: string;
 };
 
 function buildRepositoryUrl(owner: string, repo: string): string {
   return `https://github.com/${owner}/${repo}`;
+}
+
+function buildProjectProvisioningIssueUrl(owner: string, repo: string, issueNumber: number): string {
+  return `https://github.com/${owner}/${repo}/issues/${issueNumber}`;
 }
 
 function buildDefaultProjectContext(workDir: string, owner: string, repo: string): DefaultProjectContext {
@@ -116,6 +162,89 @@ function buildManagedProjectRecord(
   };
 }
 
+async function findOpenProvisioningIssueForSlug(
+  issueManager: ProjectProvisioningIssueManager,
+  slug: string,
+): Promise<IssueSummary | null> {
+  const openIssues = await issueManager.listOpenIssues();
+  return openIssues.find((issue) => {
+    const metadata = parseProjectProvisioningIssueMetadata(issue.description);
+    return metadata?.slug === slug;
+  }) ?? null;
+}
+
+function buildProjectProvisioningMetadata(options: {
+  trackerOwner: string;
+  normalizedProject: ReturnType<typeof normalizeProjectNameInput>;
+  requestedBy: string;
+  requestedAt?: string;
+}): ProjectProvisioningIssueMetadata {
+  return {
+    owner: options.trackerOwner,
+    displayName: options.normalizedProject.displayName,
+    slug: options.normalizedProject.slug,
+    repositoryName: options.normalizedProject.repositoryName,
+    issueLabel: options.normalizedProject.issueLabel,
+    workspaceRelativePath: options.normalizedProject.workspaceRelativePath,
+    requestedBy: options.requestedBy,
+    requestedAt: options.requestedAt?.trim() || new Date().toISOString(),
+  };
+}
+
+function buildCreatedStartProjectResult(options: {
+  metadata: ProjectProvisioningIssueMetadata;
+  trackerOwner: string;
+  trackerRepo: string;
+  issueNumber: number;
+  alreadyOpen: boolean;
+}): StartProjectCommandHandlingResult {
+  const issueUrl = buildProjectProvisioningIssueUrl(options.trackerOwner, options.trackerRepo, options.issueNumber);
+  return {
+    ok: true,
+    action: "created",
+    message: options.alreadyOpen
+      ? `Project \`${options.metadata.slug}\` is already queued for provisioning in issue #${options.issueNumber}.`
+      : `Created provisioning issue #${options.issueNumber} for project \`${options.metadata.slug}\`.`,
+    project: {
+      displayName: options.metadata.displayName,
+      slug: options.metadata.slug,
+      repositoryName: options.metadata.repositoryName,
+      workspacePath: options.metadata.workspaceRelativePath,
+      status: "provisioning",
+    },
+    trackerIssue: {
+      number: options.issueNumber,
+      url: issueUrl,
+      alreadyOpen: options.alreadyOpen,
+    },
+  };
+}
+
+function buildResumedStartProjectResult(
+  record: ProjectRecord,
+  message: string,
+  trackerIssue?: {
+    number: number;
+    url: string;
+    alreadyOpen: boolean;
+  },
+): StartProjectCommandHandlingResult {
+  return {
+    ok: true,
+    action: "resumed",
+    message,
+    project: {
+      displayName: record.displayName,
+      slug: record.slug,
+      repositoryName: record.executionRepo.repo,
+      repositoryUrl: record.executionRepo.url,
+      workspacePath: record.cwd,
+      status: record.status,
+    },
+    ...(trackerIssue ? { trackerIssue } : {}),
+  };
+}
+
 export async function createProjectProvisioningRequestIssue(options: {
   issueManager: ProjectProvisioningIssueManager;
   workDir: string;
@@ -137,11 +266,7 @@ export async function createProjectProvisioningRequestIssue(options: {
       };
     }
 
-    const openIssues = await options.issueManager.listOpenIssues();
-    const duplicateIssue = openIssues.find((issue) => {
-      const metadata = parseProjectProvisioningIssueMetadata(issue.description);
-      return metadata?.slug === normalized.slug;
-    });
+    const duplicateIssue = await findOpenProvisioningIssueForSlug(options.issueManager, normalized.slug);
     if (duplicateIssue) {
       return {
         ok: false,
@@ -149,16 +274,12 @@ export async function createProjectProvisioningRequestIssue(options: {
       };
     }
 
-    const metadata: ProjectProvisioningIssueMetadata = {
-      owner: options.trackerOwner,
-      displayName: normalized.displayName,
-      slug: normalized.slug,
-      repositoryName: normalized.repositoryName,
-      issueLabel: normalized.issueLabel,
-      workspaceRelativePath: normalized.workspaceRelativePath,
+    const metadata = buildProjectProvisioningMetadata({
+      trackerOwner: options.trackerOwner,
+      normalizedProject: normalized,
       requestedBy: options.requestedBy,
-      requestedAt: options.requestedAt?.trim() || new Date().toISOString(),
-    };
+      requestedAt: options.requestedAt,
+    });
     const created = await options.issueManager.createIssue(
       buildProjectProvisioningIssueTitle(metadata.displayName),
       buildProjectProvisioningIssueBody(metadata),
@@ -171,13 +292,154 @@ export async function createProjectProvisioningRequestIssue(options: {
       ok: true,
       message: created.message,
       issueNumber: created.issue.number,
-      issueUrl: `https://github.com/${options.trackerOwner}/${options.trackerRepo}/issues/${created.issue.number}`,
+      issueUrl: buildProjectProvisioningIssueUrl(options.trackerOwner, options.trackerRepo, created.issue.number),
       metadata,
     };
   } catch (error) {
     return {
       ok: false,
       message: error instanceof Error ? error.message : "Unknown project provisioning request error.",
+    };
+  }
+}
+
+export async function handleStartProjectCommand(options: {
+  issueManager: ProjectProvisioningIssueManager;
+  workDir: string;
+  trackerOwner: string;
+  trackerRepo: string;
+  projectName: string;
+  requestedBy: string;
+  requestedAt?: string;
+}): Promise<StartProjectCommandHandlingResult> {
+  try {
+    const normalized = normalizeProjectNameInput(options.projectName);
+    const defaultProject = buildDefaultProjectContext(options.workDir, options.trackerOwner, options.trackerRepo);
+    const registry = await readProjectRegistry(options.workDir, defaultProject);
+    const existingProject = findProjectBySlug(registry, normalized.slug);
+    const duplicateIssue = await findOpenProvisioningIssueForSlug(options.issueManager, normalized.slug);
+
+    if (existingProject && existingProject.status !== "failed") {
+      await setActiveProjectState({
+        workDir: options.workDir,
+        slug: existingProject.slug,
+        requestedBy: options.requestedBy,
+        source: "start-project-command",
+        updatedAt: options.requestedAt,
+      });
+      return buildResumedStartProjectResult(
+        existingProject,
+        existingProject.status === "active"
+          ? `Resumed existing project \`${existingProject.slug}\`.`
+          : `Project \`${existingProject.slug}\` already exists with status \`${existingProject.status}\`; resuming that flow.`,
+      );
+    }
+
+    if (existingProject && existingProject.status === "failed") {
+      if (duplicateIssue) {
+        await setActiveProjectState({
+          workDir: options.workDir,
+          slug: existingProject.slug,
+          requestedBy: options.requestedBy,
+          source: "start-project-command",
+          updatedAt: options.requestedAt,
+        });
+        return buildResumedStartProjectResult(
+          existingProject,
+          `Resumed existing project \`${existingProject.slug}\` and kept recovery issue #${duplicateIssue.number} active.`,
+          {
+            number: duplicateIssue.number,
+            url: buildProjectProvisioningIssueUrl(options.trackerOwner, options.trackerRepo, duplicateIssue.number),
+            alreadyOpen: true,
+          },
+        );
+      }
+
+      const recoveryRequest = await createProjectProvisioningRequestIssue({
+        issueManager: options.issueManager,
+        workDir: options.workDir,
+        trackerOwner: options.trackerOwner,
+        trackerRepo: options.trackerRepo,
+        projectName: options.projectName,
+        requestedBy: options.requestedBy,
+        requestedAt: options.requestedAt,
+      });
+      if (!recoveryRequest.ok) {
+        return recoveryRequest;
+      }
+
+      await setActiveProjectState({
+        workDir: options.workDir,
+        slug: existingProject.slug,
+        requestedBy: options.requestedBy,
+        source: "start-project-command",
+        updatedAt: options.requestedAt,
+      });
+      return buildResumedStartProjectResult(
+        existingProject,
+        `Resumed existing project \`${existingProject.slug}\` and queued recovery issue #${recoveryRequest.issueNumber}.`,
+        {
+          number: recoveryRequest.issueNumber,
+          url: recoveryRequest.issueUrl,
+          alreadyOpen: false,
+        },
+      );
+    }
+
+    if (duplicateIssue) {
+      await setActiveProjectState({
+        workDir: options.workDir,
+        slug: normalized.slug,
+        requestedBy: options.requestedBy,
+        source: "start-project-command",
+        updatedAt: options.requestedAt,
+      });
+      const metadata = buildProjectProvisioningMetadata({
+        trackerOwner: options.trackerOwner,
+        normalizedProject: normalized,
+        requestedBy: options.requestedBy,
+        requestedAt: options.requestedAt,
+      });
+      return buildCreatedStartProjectResult({
+        metadata,
+        trackerOwner: options.trackerOwner,
+        trackerRepo: options.trackerRepo,
+        issueNumber: duplicateIssue.number,
+        alreadyOpen: true,
+      });
+    }
+
+    const request = await createProjectProvisioningRequestIssue({
+      issueManager: options.issueManager,
+      workDir: options.workDir,
+      trackerOwner: options.trackerOwner,
+      trackerRepo: options.trackerRepo,
+      projectName: options.projectName,
+      requestedBy: options.requestedBy,
+      requestedAt: options.requestedAt,
+    });
+    if (!request.ok) {
+      return request;
+    }
+
+    await setActiveProjectState({
+      workDir: options.workDir,
+      slug: request.metadata.slug,
+      requestedBy: options.requestedBy,
+      source: "start-project-command",
+      updatedAt: options.requestedAt,
+    });
+    return buildCreatedStartProjectResult({
+      metadata: request.metadata,
+      trackerOwner: options.trackerOwner,
+      trackerRepo: options.trackerRepo,
+      issueNumber: request.issueNumber,
+      alreadyOpen: false,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Unknown project start request error.",
     };
   }
 }
@@ -310,6 +572,25 @@ export async function executeProjectProvisioningIssue(options: {
       metadata,
       record,
       failureStep: "workspace",
+      message,
+    };
+  }
+
+  try {
+    await setActiveProjectState({
+      workDir: options.workDir,
+      slug: metadata.slug,
+      requestedBy: metadata.requestedBy,
+      source: "project-provisioning",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown active project state update error.";
+    await persistRecord({ status: "failed" }, { lastError: message }).catch(() => undefined);
+    return {
+      ok: false,
+      metadata,
+      record,
+      failureStep: "active-project",
       message,
     };
   }
