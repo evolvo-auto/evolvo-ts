@@ -3,7 +3,6 @@ import type { TaskIssueManager } from "../../issues/taskIssueManager.js";
 import {
   readProjectRegistry,
   type DefaultProjectContext,
-  type ProjectRecord,
 } from "../../projects/projectRegistry.js";
 import {
   releaseCodingLease,
